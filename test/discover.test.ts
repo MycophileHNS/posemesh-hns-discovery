@@ -153,6 +153,29 @@ describe("discoverPosemesh", () => {
     assert.deepEqual(result.warnings, []);
   });
 
+  it("passes manifest fetch options to the configured fetcher", async () => {
+    const manifest: PosemeshManifest = {
+      version: 1,
+      sourceName: "hq.posemesh",
+    };
+    const manifestFetchOptions = { timeoutMs: 1_000, maxBytes: 4_096 };
+    let receivedOptions: unknown;
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+      }),
+      manifestFetchOptions,
+      manifestFetcher: async (_url, options) => {
+        receivedOptions = options;
+        return manifest;
+      },
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(receivedOptions, manifestFetchOptions);
+  });
+
   it("surfaces TXT parse warnings in the normalized result", async () => {
     const result = await discoverPosemesh("hq.posemesh", {
       resolver: new MockResolver({

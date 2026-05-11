@@ -13,12 +13,7 @@ export async function discoverPosemesh(
   name: string,
   options: DiscoverPosemeshOptions = {},
 ): Promise<NormalizedDiscoveryResult> {
-  const normalizedName = assertValidPosemeshName(
-    name,
-    options.allowAnyHandshakeName === undefined
-      ? {}
-      : { allowAnyHandshakeName: options.allowAnyHandshakeName },
-  );
+  const normalizedName = assertValidPosemeshName(name);
   const resolver = options.resolver ?? new DnsResolver(options.dnsServer);
   const txtRecords = await resolver.resolveTxt(normalizedName);
   const parsedTxt = parseTxtRecords(txtRecords);
@@ -29,7 +24,10 @@ export async function discoverPosemesh(
 
   if (firstManifestUrl && shouldFetchManifest) {
     try {
-      manifest = await (options.manifestFetcher ?? fetchPosemeshManifest)(firstManifestUrl);
+      manifest = await (options.manifestFetcher ?? fetchPosemeshManifest)(
+        firstManifestUrl,
+        options.manifestFetchOptions,
+      );
     } catch (error) {
       warnings.push({
         source: "manifest",

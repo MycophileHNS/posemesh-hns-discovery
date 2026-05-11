@@ -55,7 +55,7 @@ The prototype:
 - parses compact `posemesh:v1` TXT records
 - parses `agent-identity:v1` TXT records
 - fetches a remote manifest JSON when a TXT record points to one
-- validates Auki-shaped service categories in the manifest
+- validates a small Posemesh-oriented manifest shape
 - returns one normalized discovery result
 - reports TXT parse warnings instead of silently hiding malformed records
 - includes mock records so the demo works without live Handshake records
@@ -85,7 +85,7 @@ This prototype proves the basic discovery flow:
 1. A stable Handshake name can point to Posemesh discovery metadata.
 2. The metadata can be small enough to fit in TXT records.
 3. TXT records can point to richer manifest JSON.
-4. The manifest can describe actual Auki/Posemesh node categories.
+4. The manifest can describe Posemesh service categories drawn from public Auki repositories.
 5. A client can normalize all of that into one predictable object.
 
 It also proves that this can be done as a separate layer. The prototype does not modify Posemesh, hsd, hnsd, or any Auki repository.
@@ -100,7 +100,7 @@ A production version would need Auki-owned decisions and engineering work beyond
 
 - decide whether to accept and operate `.posemesh` as an official namespace
 - define a stable metadata specification and versioning policy
-- decide which names are official, curated, experimental, or community-owned
+- decide which `.posemesh` subnames are official, curated, experimental, or community-owned
 - publish live Handshake records controlled by the right operators
 - sign manifests and verify signatures in clients
 - define key rotation and revocation rules
@@ -131,7 +131,7 @@ In this prototype, `manifest` and `endpoint` both point to a JSON manifest that 
 
 ## Manifest shape
 
-The manifest schema is intentionally small, but it now mirrors Auki's public service categories more closely:
+The manifest schema is intentionally small. It uses service category names observed in public Auki repositories so the prototype feels relevant to Posemesh, but it is not an official Auki schema:
 
 ```json
 {
@@ -155,7 +155,7 @@ The manifest schema is intentionally small, but it now mirrors Auki's public ser
 
 Signature verification is intentionally marked as prototype-only work. Production clients should not trust remote manifests without a clear signing and verification policy.
 
-For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, blocks obvious localhost/private-network literal addresses, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model.
+For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, checks hostnames for localhost/private/reserved addresses before fetching, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model; production clients should use stronger network isolation and signed manifests because DNS answers can change over time.
 
 ## Run the demo
 
@@ -163,6 +163,7 @@ This project can run on recent Node.js versions that support built-in TypeScript
 
 ```bash
 npm test
+npm run build
 npm run demo
 npm run resolve -- hq.posemesh
 npm run resolve -- nils.posemesh
@@ -170,6 +171,8 @@ npm run resolve -- americaNorth.posemesh
 ```
 
 The default CLI mode uses mock records from [`src/demo.ts`](src/demo.ts).
+
+The CLI intentionally accepts only subnames under `.posemesh`, such as `hq.posemesh` or `relays.posemesh`. The root name `posemesh` and unrelated Handshake names are outside this prototype.
 
 To try live DNS resolution through a Handshake-aware resolver:
 
@@ -185,7 +188,7 @@ That DNS server could be backed by software such as hsd or hnsd, depending on th
 - [`src/name.ts`](src/name.ts) validates `.posemesh` names for the current prototype.
 - [`src/parser.ts`](src/parser.ts) parses compact Posemesh TXT records and `agent-identity:v1` records.
 - [`src/resolvers.ts`](src/resolvers.ts) contains the resolver interface, `MockResolver`, and `DnsResolver`.
-- [`src/manifest.ts`](src/manifest.ts) fetches and validates manifest JSON, including Auki-shaped node categories.
+- [`src/manifest.ts`](src/manifest.ts) fetches and validates manifest JSON, including Posemesh-oriented service categories.
 - [`src/discover.ts`](src/discover.ts) contains `discoverPosemesh(name, options)`.
 - [`src/cli.ts`](src/cli.ts) powers `npm run resolve` and `npm run demo`.
 - [`test/`](test) contains Node test runner coverage.

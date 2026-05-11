@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { discoverPosemesh } from "./discover.ts";
 import { demoManifestFetcher, demoNames, demoTxtRecords } from "./demo.ts";
 import { DnsResolver, MockResolver } from "./resolvers.ts";
@@ -6,7 +7,6 @@ import type { DiscoverPosemeshOptions } from "./types.ts";
 interface CliOptions {
   live: boolean;
   dnsServer?: string;
-  allowAnyHandshakeName: boolean;
   fetchManifest: boolean;
 }
 
@@ -35,7 +35,6 @@ async function runResolve(args: string[]): Promise<void> {
   }
 
   const discoveryOptions: DiscoverPosemeshOptions = {
-    allowAnyHandshakeName: options.allowAnyHandshakeName,
     resolver: options.live ? new DnsResolver(options.dnsServer) : new MockResolver(demoTxtRecords),
     fetchManifest: options.fetchManifest,
   };
@@ -68,7 +67,6 @@ function parseArgs(args: string[]): { positional: string[]; options: CliOptions 
   const positional: string[] = [];
   const options: CliOptions = {
     live: false,
-    allowAnyHandshakeName: false,
     fetchManifest: true,
   };
 
@@ -81,8 +79,6 @@ function parseArgs(args: string[]): { positional: string[]; options: CliOptions 
 
     if (arg === "--live") {
       options.live = true;
-    } else if (arg === "--allow-any-handshake-name") {
-      options.allowAnyHandshakeName = true;
     } else if (arg === "--no-manifest") {
       options.fetchManifest = false;
     } else if (arg === "--dns-server") {
@@ -112,7 +108,8 @@ Commands:
 Options:
   --live                         Resolve TXT records with DNS instead of demo records.
   --dns-server 127.0.0.1:5350    Use a specific Handshake-aware DNS server.
-  --allow-any-handshake-name     Permit names outside .posemesh.
   --no-manifest                  Parse TXT records without fetching manifests.
+
+Only subnames under .posemesh are accepted.
 `);
 }

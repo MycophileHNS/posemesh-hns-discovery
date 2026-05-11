@@ -17,11 +17,18 @@ describe(".posemesh name validation", () => {
     }
   });
 
-  it("rejects non-.posemesh names by default", () => {
+  it("rejects names outside .posemesh", () => {
     const result = validatePosemeshName("example.hns");
 
     assert.equal(result.ok, false);
     assert.match(result.error ?? "", /\.posemesh/);
+  });
+
+  it("rejects the .posemesh root because the prototype always uses subnames", () => {
+    const result = validatePosemeshName("posemesh");
+
+    assert.equal(result.ok, false);
+    assert.match(result.error ?? "", /subname/);
   });
 
   it("rejects empty labels and labels ending in hyphen", () => {
@@ -30,12 +37,4 @@ describe(".posemesh name validation", () => {
     }
   });
 
-  it("accepts other Handshake names when allowAnyHandshakeName is true", () => {
-    const result = validatePosemeshName("example.hns", {
-      allowAnyHandshakeName: true,
-    });
-
-    assert.equal(result.ok, true);
-    assert.equal(result.normalizedName, "example.hns");
-  });
 });

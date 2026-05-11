@@ -12,12 +12,12 @@ Handshake can provide an owner-controlled naming layer for that discovery proble
 
 This prototype now shows one concrete path:
 
-1. Resolve TXT records for a `.posemesh` name.
+1. Resolve TXT records for a subname under `.posemesh`.
 2. Parse versioned Posemesh or agent identity metadata.
 3. Fetch a manifest that could later be signed and verified.
 4. Return normalized service discovery data for clients, tools, robots, and agents.
 
-The manifest schema has been expanded beyond generic relays and domain managers to include Auki-shaped categories: reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, wallets, regions, and health checks.
+The manifest schema has been expanded beyond generic relays and domain managers to include Posemesh-oriented categories observed in public Auki repositories: reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, wallets, regions, and health checks. This is prototype terminology, not an official Auki schema.
 
 ## The Fit With Auki's Public Repos
 
@@ -99,7 +99,7 @@ The `agent-identity:v1` support in this prototype lets the same `.posemesh` nami
 
 If community operators run public domain servers, relays, or compute nodes, they need a way to publish discoverable metadata. Auki can still curate official lists, but Handshake gives operators a path to publish their own identity and capabilities.
 
-If `.posemesh` were gifted to and accepted by Auki, this could support a layered model:
+If `.posemesh` were gifted to and accepted by Auki, subnames under it could support a layered model:
 
 - Auki-operated `.posemesh` names for canonical infrastructure.
 - Region names for curated regional discovery.
@@ -156,7 +156,7 @@ This should not be treated as production-ready until Auki has made clear decisio
 
 - metadata schema ownership and versioning
 - whether to accept and operate `.posemesh` as an official namespace
-- which names are official, curated, or community-owned
+- which `.posemesh` subnames are official, curated, or community-owned
 - public key and wallet binding rules
 - manifest signing and verification
 - key rotation and revocation
@@ -168,7 +168,7 @@ This should not be treated as production-ready until Auki has made clear decisio
 
 ## Suggested Manifest Shape
 
-The prototype now supports an Auki-facing manifest shape:
+The prototype now supports a Posemesh-oriented manifest shape:
 
 ```json
 {
@@ -190,7 +190,7 @@ The prototype now supports an Auki-facing manifest shape:
 }
 ```
 
-The important production step is still signature verification. TXT records can point to a manifest, but clients need a way to verify that the manifest was authorized by the expected `.posemesh` name or operator key.
+The important production step is still signature verification. TXT records can point to a manifest, but clients need a way to verify that the manifest was authorized by the expected `.posemesh` subname or operator key.
 
 ## Suggested Adoption Path
 
@@ -217,7 +217,7 @@ Build an optional adapter that can resolve `.posemesh` discovery manifests and f
 
 ### Phase 5: Production Hardening
 
-Add signatures, trust policy, resolver redundancy, cache behavior, security review, and operational monitoring.
+Add signatures, trust policy, resolver redundancy, cache behavior, network isolation for manifest fetching, security review, and operational monitoring.
 
 ## Bottom Line
 

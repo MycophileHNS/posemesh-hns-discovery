@@ -1,7 +1,3 @@
-export interface ValidatePosemeshNameOptions {
-  allowAnyHandshakeName?: boolean;
-}
-
 export interface NameValidationResult {
   ok: boolean;
   normalizedName?: string;
@@ -15,10 +11,7 @@ export function normalizeName(name: string): string {
   return name.trim().replace(/\.$/, "");
 }
 
-export function validatePosemeshName(
-  name: string,
-  options: ValidatePosemeshNameOptions = {},
-): NameValidationResult {
+export function validatePosemeshName(name: string): NameValidationResult {
   const normalizedName = normalizeName(name);
 
   if (!normalizedName) {
@@ -39,21 +32,18 @@ export function validatePosemeshName(
     };
   }
 
-  if (!options.allowAnyHandshakeName && !normalizedName.toLowerCase().endsWith(".posemesh")) {
+  if (!normalizedName.toLowerCase().endsWith(".posemesh")) {
     return {
       ok: false,
-      error: "Name must end in .posemesh unless allowAnyHandshakeName is true.",
+      error: "Name must be a subname ending in .posemesh.",
     };
   }
 
   return { ok: true, normalizedName };
 }
 
-export function assertValidPosemeshName(
-  name: string,
-  options: ValidatePosemeshNameOptions = {},
-): string {
-  const result = validatePosemeshName(name, options);
+export function assertValidPosemeshName(name: string): string {
+  const result = validatePosemeshName(name);
 
   if (!result.ok || !result.normalizedName) {
     throw new Error(result.error ?? "Invalid .posemesh name.");

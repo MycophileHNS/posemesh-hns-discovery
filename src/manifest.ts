@@ -1,7 +1,10 @@
+import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type {
   BootstrapNode,
   DomainManager,
+  FetchPosemeshManifestOptions,
+  ManifestHostResolver,
   PathfindingService,
   PosemeshManifest,
   PosemeshServiceEndpoint,
@@ -15,19 +18,25 @@ import type {
 const DEFAULT_MANIFEST_TIMEOUT_MS = 5_000;
 const DEFAULT_MANIFEST_MAX_BYTES = 128 * 1024;
 
-export interface FetchPosemeshManifestOptions {
-  timeoutMs?: number;
-  maxBytes?: number;
-}
+const defaultManifestHostResolver: ManifestHostResolver = async (hostname) => {
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  return addresses.map(({ address, family }) => ({
+    address,
+    family: family === 6 ? 6 : 4,
+  }));
+};
 
 export async function fetchPosemeshManifest(
   url: string,
   options: FetchPosemeshManifestOptions = {},
 ): Promise<PosemeshManifest> {
-  assertSafeManifestUrl(url);
+  const manifestUrl = await assertSafeManifestUrl(
+    url,
+    options.resolveHostname ?? defaultManifestHostResolver,
+  );
 
   const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
-  const response = await fetch(url, {
+  const response = await fetch(manifestUrl, {
     headers: {
       accept: "application/json",
     },
@@ -246,7 +255,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function assertSafeManifestUrl(url: string): void {
+async function assertSafeManifestUrl(
+  url: string,
+  resolveHostname: ManifestHostResolver,
+): Promise<URL> {
   let parsed: URL;
 
   try {
@@ -259,9 +271,8 @@ function assertSafeManifestUrl(url: string): void {
     throw new Error("Manifest URL must use https.");
   }
 
-  if (isLocalOrPrivateHost(parsed.hostname)) {
-    throw new Error("Manifest URL must not use localhost or a private network address.");
-  }
+  await assertPublicManifestHost(parsed.hostname, resolveHostname);
+  return parsed;
 }
 
 function validateUrl(url: string, field: string, protocols: string[]): string {
@@ -284,8 +295,48 @@ function isAllowedProtocol(protocol: string, protocols: string[]): boolean {
   return protocols.includes(protocol);
 }
 
+async function assertPublicManifestHost(
+  hostname: string,
+  resolveHostname: ManifestHostResolver,
+): Promise<void> {
+  const host = normalizeHost(hostname);
+
+  if (isLocalOrPrivateHost(host)) {
+    throw new Error("Manifest URL must not use localhost, private, or reserved network addresses.");
+  }
+
+  if (isIP(host)) {
+    return;
+  }
+
+  let addresses: Awaited<ReturnType<ManifestHostResolver>>;
+
+  try {
+    addresses = await resolveHostname(host);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown host lookup error.";
+    throw new Error(`Manifest host lookup failed for ${host}: ${message}`);
+  }
+
+  if (addresses.length === 0) {
+    throw new Error(`Manifest host lookup returned no addresses for ${host}.`);
+  }
+
+  const blockedAddress = addresses.find(({ address }) => isLocalOrPrivateHost(address));
+
+  if (blockedAddress) {
+    throw new Error(
+      `Manifest host ${host} resolves to a localhost, private, or reserved network address.`,
+    );
+  }
+}
+
+function normalizeHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+}
+
 function isLocalOrPrivateHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const host = normalizeHost(hostname);
 
   if (host === "localhost" || host.endsWith(".localhost")) {
     return true;
@@ -305,27 +356,41 @@ function isLocalOrPrivateHost(hostname: string): boolean {
 }
 
 function isPrivateIpv4(host: string): boolean {
-  const [first = 0, second = 0] = host.split(".").map((part) => Number(part));
+  const [first = 0, second = 0, third = 0] = host.split(".").map((part) => Number(part));
 
   return (
     first === 0 ||
     first === 10 ||
+    (first === 100 && second >= 64 && second <= 127) ||
     first === 127 ||
     (first === 169 && second === 254) ||
     (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
+    (first === 192 && second === 0 && (third === 0 || third === 2)) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51 && third === 100) ||
+    (first === 203 && second === 0 && third === 113) ||
+    first >= 224
   );
 }
 
 function isPrivateIpv6(host: string): boolean {
+  const mappedIpv4 = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+
+  if (mappedIpv4?.[1]) {
+    return isPrivateIpv4(mappedIpv4[1]);
+  }
+
   return (
+    host === "::" ||
     host === "::1" ||
     host.startsWith("fc") ||
     host.startsWith("fd") ||
     host.startsWith("fe8") ||
     host.startsWith("fe9") ||
     host.startsWith("fea") ||
-    host.startsWith("feb")
+    host.startsWith("feb") ||
+    host.startsWith("2001:db8")
   );
 }
 

@@ -1,7 +1,6 @@
 export { discoverPosemesh } from "./discover.ts";
 export { demoManifestFetcher, demoManifests, demoNames, demoTxtRecords } from "./demo.ts";
 export { fetchPosemeshManifest, parsePosemeshManifest } from "./manifest.ts";
-export type { FetchPosemeshManifestOptions } from "./manifest.ts";
 export { assertValidPosemeshName, normalizeName, validatePosemeshName } from "./name.ts";
 export {
   parseAgentIdentityTxt,
@@ -14,7 +13,10 @@ export type {
   BootstrapNode,
   DiscoverPosemeshOptions,
   DomainManager,
+  FetchPosemeshManifestOptions,
   ManifestFetcher,
+  ManifestHostResolver,
+  ManifestResolvedAddress,
   NormalizedDiscoveryResult,
   PathfindingService,
   ParsedTxtRecords,

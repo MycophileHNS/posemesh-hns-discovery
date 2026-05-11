@@ -102,13 +102,29 @@ export interface ParsedTxtRecords {
   warnings: ParseWarning[];
 }
 
-export type ManifestFetcher = (url: string) => Promise<PosemeshManifest>;
+export interface ManifestResolvedAddress {
+  address: string;
+  family: 4 | 6;
+}
+
+export type ManifestHostResolver = (hostname: string) => Promise<ManifestResolvedAddress[]>;
+
+export interface FetchPosemeshManifestOptions {
+  timeoutMs?: number;
+  maxBytes?: number;
+  resolveHostname?: ManifestHostResolver;
+}
+
+export type ManifestFetcher = (
+  url: string,
+  options?: FetchPosemeshManifestOptions,
+) => Promise<PosemeshManifest>;
 
 export interface DiscoverPosemeshOptions {
-  allowAnyHandshakeName?: boolean;
   resolver?: TxtResolver;
   dnsServer?: string;
   fetchManifest?: boolean;
+  manifestFetchOptions?: FetchPosemeshManifestOptions;
   manifestFetcher?: ManifestFetcher;
   now?: () => Date;
 }

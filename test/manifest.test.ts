@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { fetchPosemeshManifest, parsePosemeshManifest } from "../src/manifest.ts";
 
 describe("Posemesh manifest parsing", () => {
-  it("parses Auki-shaped node categories", () => {
+  it("parses Posemesh-oriented node categories", () => {
     const manifest = parsePosemeshManifest({
       version: 1,
       sourceName: "americaNorth.posemesh",
@@ -83,7 +83,7 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(manifest.healthCheck, "https://example.com/health");
   });
 
-  it("rejects malformed Auki-shaped service arrays", () => {
+  it("rejects malformed Posemesh-oriented service arrays", () => {
     assert.throws(
       () => parsePosemeshManifest({
         version: 1,
@@ -111,7 +111,7 @@ describe("Posemesh manifest parsing", () => {
 
     await assert.rejects(
       () => fetchPosemeshManifest("https://127.0.0.1/posemesh.json"),
-      /localhost|private/,
+      /localhost|private|reserved/,
     );
 
     assert.throws(
@@ -120,6 +120,16 @@ describe("Posemesh manifest parsing", () => {
         relays: [{ endpoint: "http://relay.example.com" }],
       }),
       /relays\.endpoint/,
+    );
+  });
+
+  it("rejects manifest hostnames that resolve to private addresses", async () => {
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifest("https://manifest.example.test/posemesh.json", {
+          resolveHostname: async () => [{ address: "10.0.0.5", family: 4 }],
+        }),
+      /resolves.*private|reserved/,
     );
   });
 });
