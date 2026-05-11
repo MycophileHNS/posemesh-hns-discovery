@@ -109,6 +109,11 @@ describe("Posemesh manifest parsing", () => {
       /https/,
     );
 
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://127.0.0.1/posemesh.json"),
+      /localhost|private/,
+    );
+
     assert.throws(
       () => parsePosemeshManifest({
         version: 1,

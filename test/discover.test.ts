@@ -169,4 +169,25 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
   });
+
+  it("keeps TXT-derived data when manifest fetching fails", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": [
+          "posemesh:v1; manifest=https://example.com/missing.json; publicKey=TXT_KEY; capabilities=domain-discovery",
+        ],
+      }),
+      manifestFetcher: async () => {
+        throw new Error("demo fetch failed");
+      },
+      now: () => fixedNow,
+    });
+
+    assert.equal(result.manifestUrl, "https://example.com/missing.json");
+    assert.deepEqual(result.publicKeys, ["TXT_KEY"]);
+    assert.deepEqual(result.capabilities, ["domain-discovery"]);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.source, "manifest");
+    assert.equal(result.warnings[0]?.url, "https://example.com/missing.json");
+  });
 });

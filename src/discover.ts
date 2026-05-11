@@ -24,14 +24,25 @@ export async function discoverPosemesh(
   const parsedTxt = parseTxtRecords(txtRecords);
   const firstManifestUrl = parsedTxt.records.find((record) => record.manifestUrl)?.manifestUrl;
   const shouldFetchManifest = options.fetchManifest ?? true;
-  const manifest = firstManifestUrl && shouldFetchManifest
-    ? await (options.manifestFetcher ?? fetchPosemeshManifest)(firstManifestUrl)
-    : undefined;
+  const warnings = [...parsedTxt.warnings];
+  let manifest: PosemeshManifest | undefined;
+
+  if (firstManifestUrl && shouldFetchManifest) {
+    try {
+      manifest = await (options.manifestFetcher ?? fetchPosemeshManifest)(firstManifestUrl);
+    } catch (error) {
+      warnings.push({
+        source: "manifest",
+        url: firstManifestUrl,
+        message: error instanceof Error ? error.message : "Unknown manifest fetch error.",
+      });
+    }
+  }
 
   return normalizeDiscoveryResult({
     name: normalizedName,
     records: parsedTxt.records,
-    warnings: parsedTxt.warnings,
+    warnings,
     resolvedAt: (options.now ?? (() => new Date()))().toISOString(),
     ...(manifest ? { manifest } : {}),
     ...(firstManifestUrl ? { manifestUrl: firstManifestUrl } : {}),

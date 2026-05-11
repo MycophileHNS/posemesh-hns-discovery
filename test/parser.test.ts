@@ -29,6 +29,16 @@ describe("TXT parsing", () => {
     assert.deepEqual(parsed.capabilities, ["domain-discovery", "relay-discovery"]);
   });
 
+  it("reports malformed agent identity fields as warnings", () => {
+    const result = parseTxtRecords([
+      "agent-identity:v1={\"version\":1,\"endpoint\":\"http://example.com/agent.json\",\"capabilities\":[\"domain-discovery\"]}",
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0]?.message ?? "", /https/);
+  });
+
   it("ignores unrelated TXT records and reports parse warnings", () => {
     const result = parseTxtRecords([
       "v=spf1 -all",

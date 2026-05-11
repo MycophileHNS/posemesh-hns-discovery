@@ -25,9 +25,9 @@ The result is a stable name that can keep working even when the infrastructure b
 
 Live lookups require a Handshake-aware DNS resolver or resolver API. The default demo uses mock records so reviewers can understand the flow without setting up Handshake infrastructure.
 
-## Why Handshake + .auki matters for Posemesh
+## Why Handshake + .posemesh matters for Posemesh
 
-An Auki-controlled Handshake name such as `.auki` could become a resilient discovery root for the Auki and Posemesh ecosystem.
+The proposed integration should stay focused on `.posemesh`. The intent is that `.posemesh` can become a resilient discovery root for Posemesh infrastructure if Auki chooses to accept and operate it.
 
 The important idea is not “make a website resolve in a browser.” These names are headless. Agents, CLIs, SDKs, robots, and services can resolve them through DNS, resolver APIs, or Handshake-aware infrastructure.
 
@@ -35,15 +35,15 @@ The useful idea is:
 
 > A Handshake name can act as an owner-controlled discovery and identity anchor for Auki-operated and community-operated Posemesh infrastructure.
 
-These are hypothetical examples only. This repository does not control `.auki`, does not claim Auki has chosen this namespace, and does not publish official Auki records. If Auki chose to use `.auki` or another Auki-controlled Handshake name, it could publish discovery records such as:
+These are hypothetical examples only. This repository does not control `.posemesh`, does not claim Auki has accepted or deployed it, and does not publish official Auki records. If `.posemesh` were gifted to and accepted by Auki, it could publish discovery records such as:
 
-- `posemesh.auki`: canonical Posemesh discovery manifest
-- `relays.posemesh.auki`: Relay/Hagall discovery
-- `domains.posemesh.auki`: domain manager discovery
-- `america-north.posemesh.auki`: regional services and bootstrap nodes
-- `compute.posemesh.auki`: reconstruction, splatter, VLM, and pathfinding services
+- `hq.posemesh`: canonical Posemesh discovery manifest
+- `relays.posemesh`: Relay/Hagall discovery
+- `domains.posemesh`: domain manager discovery
+- `americaNorth.posemesh`: regional services and bootstrap nodes
+- `compute.posemesh`: reconstruction, splatter, VLM, and pathfinding services
 
-This repository currently demos `.posemesh` names such as `hq.posemesh`, `relays.posemesh`, and `americaNorth.posemesh`. The same discovery pattern could be adapted to `.auki` if Auki wanted a broader organization-level namespace.
+This repository demos `.posemesh` names such as `hq.posemesh`, `relays.posemesh`, and `americaNorth.posemesh`.
 
 Handshake helps because the name can remain stable while endpoints, regions, keys, and service operators change. That makes Posemesh more resilient to API moves, cloud migrations, service reorganization, and future community-operated infrastructure.
 
@@ -98,7 +98,7 @@ For a longer Auki-facing argument, see [`docs/auki-resilience-case.md`](docs/auk
 
 A production version would need Auki-owned decisions and engineering work beyond this prototype:
 
-- choose the official namespace, such as `.auki`, `.posemesh`, or another Auki-controlled Handshake name
+- decide whether to accept and operate `.posemesh` as an official namespace
 - define a stable metadata specification and versioning policy
 - decide which names are official, curated, experimental, or community-owned
 - publish live Handshake records controlled by the right operators
@@ -155,7 +155,7 @@ The manifest schema is intentionally small, but it now mirrors Auki's public ser
 
 Signature verification is intentionally marked as prototype-only work. Production clients should not trust remote manifests without a clear signing and verification policy.
 
-For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model.
+For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, blocks obvious localhost/private-network literal addresses, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model.
 
 ## Run the demo
 

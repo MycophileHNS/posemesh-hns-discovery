@@ -99,9 +99,9 @@ The `agent-identity:v1` support in this prototype lets the same `.posemesh` nami
 
 If community operators run public domain servers, relays, or compute nodes, they need a way to publish discoverable metadata. Auki can still curate official lists, but Handshake gives operators a path to publish their own identity and capabilities.
 
-This could support a layered model:
+If `.posemesh` were gifted to and accepted by Auki, this could support a layered model:
 
-- Auki-operated names for canonical infrastructure.
+- Auki-operated `.posemesh` names for canonical infrastructure.
 - Region names for curated regional discovery.
 - Operator-owned names for independent service identity.
 - Client policy for deciding which names or keys to trust.
@@ -155,6 +155,7 @@ Use naming levels to separate trust:
 This should not be treated as production-ready until Auki has made clear decisions about:
 
 - metadata schema ownership and versioning
+- whether to accept and operate `.posemesh` as an official namespace
 - which names are official, curated, or community-owned
 - public key and wallet binding rules
 - manifest signing and verification

@@ -16,6 +16,7 @@ export function parseTxtRecords(txtRecords: string[]): ParsedTxtRecords {
       }
     } catch (error) {
       warnings.push({
+        source: "txt",
         record,
         message: error instanceof Error ? error.message : "Unknown TXT parsing error.",
       });
@@ -82,7 +83,7 @@ export function parsePosemeshTxt(record: string): PosemeshDiscoveryRecord {
   };
 
   if (manifestUrl) {
-    result.manifestUrl = manifestUrl;
+    result.manifestUrl = parseHttpsUrl(manifestUrl, "manifest");
   }
 
   return result;
@@ -100,8 +101,8 @@ export function parseAgentIdentityTxt(record: string): PosemeshDiscoveryRecord {
     throw new Error("Unsupported agent-identity version.");
   }
 
-  const endpoint = optionalString(parsed.endpoint);
-  const capabilities = optionalStringArray(parsed.capabilities);
+  const endpoint = requiredString(parsed.endpoint, "endpoint");
+  const capabilities = optionalStringArray(parsed.capabilities, "capabilities");
   const publicKeys = extractPublicKeys(parsed);
 
   const result: PosemeshDiscoveryRecord = {
@@ -112,9 +113,7 @@ export function parseAgentIdentityTxt(record: string): PosemeshDiscoveryRecord {
     capabilities,
   };
 
-  if (endpoint) {
-    result.manifestUrl = endpoint;
-  }
+  result.manifestUrl = parseHttpsUrl(endpoint, "endpoint");
 
   return result;
 }
@@ -131,8 +130,8 @@ function splitCsv(value: string | undefined): string[] {
 }
 
 function extractPublicKeys(value: Record<string, unknown>): string[] {
-  const publicKeys = optionalStringArray(value.publicKeys);
-  const publicKey = optionalString(value.publicKey);
+  const publicKeys = optionalStringArray(value.publicKeys, "publicKeys");
+  const publicKey = optionalString(value.publicKey, "publicKey");
 
   if (publicKey) {
     return [...publicKeys, publicKey];
@@ -141,18 +140,60 @@ function extractPublicKeys(value: Record<string, unknown>): string[] {
   return publicKeys;
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`agent-identity field ${field} must be a non-empty string.`);
+  }
+
+  return value.trim();
 }
 
-function optionalStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`agent-identity field ${field} must be a non-empty string.`);
+  }
+
+  return value.trim();
+}
+
+function optionalStringArray(value: unknown, field: string): string[] {
+  if (value === undefined) {
     return [];
   }
 
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  if (!Array.isArray(value)) {
+    throw new Error(`agent-identity field ${field} must be an array.`);
+  }
+
+  return value.map((item, index) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`agent-identity field ${field}[${index}] must be a non-empty string.`);
+    }
+
+    return item.trim();
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseHttpsUrl(value: string, field: string): string {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`TXT field ${field} must be a valid URL.`);
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error(`TXT field ${field} must use https.`);
+  }
+
+  return value;
 }

@@ -91,7 +91,9 @@ export interface TxtResolver {
 }
 
 export interface ParseWarning {
-  record: string;
+  source: "txt" | "manifest";
+  record?: string;
+  url?: string;
   message: string;
 }
 

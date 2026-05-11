@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type {
   BootstrapNode,
   DomainManager,
@@ -257,6 +258,10 @@ function assertSafeManifestUrl(url: string): void {
   if (!isAllowedProtocol(parsed.protocol, ["https:"])) {
     throw new Error("Manifest URL must use https.");
   }
+
+  if (isLocalOrPrivateHost(parsed.hostname)) {
+    throw new Error("Manifest URL must not use localhost or a private network address.");
+  }
 }
 
 function validateUrl(url: string, field: string, protocols: string[]): string {
@@ -277,6 +282,51 @@ function validateUrl(url: string, field: string, protocols: string[]): string {
 
 function isAllowedProtocol(protocol: string, protocols: string[]): boolean {
   return protocols.includes(protocol);
+}
+
+function isLocalOrPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+
+  if (host === "localhost" || host.endsWith(".localhost")) {
+    return true;
+  }
+
+  const ipVersion = isIP(host);
+
+  if (ipVersion === 4) {
+    return isPrivateIpv4(host);
+  }
+
+  if (ipVersion === 6) {
+    return isPrivateIpv6(host);
+  }
+
+  return false;
+}
+
+function isPrivateIpv4(host: string): boolean {
+  const [first = 0, second = 0] = host.split(".").map((part) => Number(part));
+
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isPrivateIpv6(host: string): boolean {
+  return (
+    host === "::1" ||
+    host.startsWith("fc") ||
+    host.startsWith("fd") ||
+    host.startsWith("fe8") ||
+    host.startsWith("fe9") ||
+    host.startsWith("fea") ||
+    host.startsWith("feb")
+  );
 }
 
 async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
