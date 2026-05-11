@@ -1,0 +1,27 @@
+{
+  "name": "posemesh-hns-discovery",
+  "version": "0.1.0",
+  "description": "Proof-of-concept Handshake .posemesh discovery and identity resolver for Posemesh discussion.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "resolve": "node --experimental-transform-types src/cli.ts resolve",
+    "demo": "node --experimental-transform-types src/cli.ts demo",
+    "test": "node --test --experimental-transform-types test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "posemesh",
+    "handshake",
+    "hns",
+    "discovery",
+    "identity"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}
