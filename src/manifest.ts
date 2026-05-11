@@ -1,10 +1,14 @@
 import { lookup } from "node:dns/promises";
+import { request } from "node:https";
 import { isIP } from "node:net";
+import { TextDecoder } from "node:util";
+import { parsePublicKey } from "./public-keys.ts";
 import type {
   BootstrapNode,
   DomainManager,
   FetchPosemeshManifestOptions,
   ManifestHostResolver,
+  ManifestResolvedAddress,
   PathfindingService,
   PosemeshManifest,
   PosemeshServiceEndpoint,
@@ -36,19 +40,13 @@ export async function fetchPosemeshManifest(
   );
 
   const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
-  const response = await fetch(manifestUrl, {
-    headers: {
-      accept: "application/json",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Manifest fetch failed for ${url}: HTTP ${response.status}`);
-  }
-
-  const json = JSON.parse(await readLimitedText(response, maxBytes)) as unknown;
+  const text = await fetchManifestText(
+    manifestUrl.url,
+    manifestUrl.address,
+    options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
+    maxBytes,
+  );
+  const json = JSON.parse(text) as unknown;
   return parsePosemeshManifest(json);
 }
 
@@ -80,7 +78,7 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     ),
     bootstrapNodes: parseBootstrapNodes(value.bootstrapNodes),
     wallets: parseWallets(value.wallets),
-    publicKeys: parseStringArray(value.publicKeys),
+    publicKeys: parsePublicKeyArray(value.publicKeys, "publicKeys"),
     capabilities: parseStringArray(value.capabilities),
     ...optionalUrlField(value, "healthCheck", ["https:"]),
     ...optionalStringField(value, "signature"),
@@ -141,7 +139,7 @@ function parseServiceEndpoint<T extends PosemeshServiceEndpoint>(
     endpoint: requiredUrlField(value, "endpoint", field, ["https:", "wss:"]),
     ...optionalStringField(value, "region"),
     ...optionalStringField(value, "transport"),
-    ...optionalStringField(value, "publicKey"),
+    ...optionalPublicKeyField(value, "publicKey"),
     capabilities: parseStringArray(value.capabilities),
     ...optionalUrlField(value, "healthCheck", ["https:"]),
   };
@@ -154,7 +152,7 @@ function parseWallets(value: unknown): WalletReference[] {
     address: requiredStringField(item, "address", "wallets"),
     ...optionalStringField(item, "chain"),
     ...optionalStringField(item, "role"),
-    ...optionalStringField(item, "publicKey"),
+    ...optionalPublicKeyField(item, "publicKey"),
   }));
 }
 
@@ -192,6 +190,12 @@ function parseStringArray(value: unknown): string[] {
 
     return item.trim();
   });
+}
+
+function parsePublicKeyArray(value: unknown, field: string): string[] {
+  return parseStringArray(value).map((item, index) =>
+    parsePublicKey(item, `Manifest field ${field}[${index}]`),
+  );
 }
 
 function requiredStringField(
@@ -234,6 +238,22 @@ function optionalStringField<T extends string>(
   return { [field]: item.trim() } as Partial<Record<T, string>>;
 }
 
+function optionalPublicKeyField<T extends string>(
+  value: Record<string, unknown>,
+  field: T,
+): Partial<Record<T, string>> {
+  const stringField = optionalStringField(value, field);
+  const item = stringField[field];
+
+  if (!item) {
+    return {};
+  }
+
+  return { [field]: parsePublicKey(item, `Manifest field ${field}`) } as Partial<
+    Record<T, string>
+  >;
+}
+
 function optionalUrlField<T extends string>(
   value: Record<string, unknown>,
   field: T,
@@ -255,10 +275,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+interface SafeManifestUrl {
+  url: URL;
+  address: ManifestResolvedAddress;
+}
+
 async function assertSafeManifestUrl(
   url: string,
   resolveHostname: ManifestHostResolver,
-): Promise<URL> {
+): Promise<SafeManifestUrl> {
   let parsed: URL;
 
   try {
@@ -271,8 +296,8 @@ async function assertSafeManifestUrl(
     throw new Error("Manifest URL must use https.");
   }
 
-  await assertPublicManifestHost(parsed.hostname, resolveHostname);
-  return parsed;
+  const address = await assertPublicManifestHost(parsed.hostname, resolveHostname);
+  return { url: parsed, address };
 }
 
 function validateUrl(url: string, field: string, protocols: string[]): string {
@@ -298,15 +323,17 @@ function isAllowedProtocol(protocol: string, protocols: string[]): boolean {
 async function assertPublicManifestHost(
   hostname: string,
   resolveHostname: ManifestHostResolver,
-): Promise<void> {
+): Promise<ManifestResolvedAddress> {
   const host = normalizeHost(hostname);
 
   if (isLocalOrPrivateHost(host)) {
     throw new Error("Manifest URL must not use localhost, private, or reserved network addresses.");
   }
 
-  if (isIP(host)) {
-    return;
+  const ipVersion = isIP(host);
+
+  if (ipVersion) {
+    return { address: host, family: ipVersion === 6 ? 6 : 4 };
   }
 
   let addresses: Awaited<ReturnType<ManifestHostResolver>>;
@@ -325,10 +352,10 @@ async function assertPublicManifestHost(
   const blockedAddress = addresses.find(({ address }) => isLocalOrPrivateHost(address));
 
   if (blockedAddress) {
-    throw new Error(
-      `Manifest host ${host} resolves to a localhost, private, or reserved network address.`,
-    );
+    throw new Error(`Manifest host ${host} resolves to a localhost, private, or reserved network address.`);
   }
+
+  return addresses[0]!;
 }
 
 function normalizeHost(hostname: string): string {
@@ -394,36 +421,81 @@ function isPrivateIpv6(host: string): boolean {
   );
 }
 
-async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
-  const contentLength = response.headers.get("content-length");
+function fetchManifestText(
+  url: URL,
+  address: ManifestResolvedAddress,
+  timeoutMs: number,
+  maxBytes: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    const decoder = new TextDecoder();
+    let bytesRead = 0;
 
-  if (contentLength && Number(contentLength) > maxBytes) {
-    throw new Error(`Manifest response is larger than ${maxBytes} bytes.`);
-  }
+    const req = request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          host: url.host,
+        },
+        servername: isIP(normalizeHost(url.hostname)) ? undefined : url.hostname,
+        lookup: (_hostname, _options, callback) => {
+          callback(null, address.address, address.family);
+        },
+      },
+      (response) => {
+        const statusCode = response.statusCode ?? 0;
 
-  if (!response.body) {
-    return "";
-  }
+        if (statusCode >= 300 && statusCode < 400) {
+          response.resume();
+          reject(new Error(`Manifest fetch failed for ${url.toString()}: redirects are not allowed.`));
+          return;
+        }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytesRead = 0;
-  let text = "";
+        if (statusCode < 200 || statusCode >= 300) {
+          response.resume();
+          reject(new Error(`Manifest fetch failed for ${url.toString()}: HTTP ${statusCode}`));
+          return;
+        }
 
-  while (true) {
-    const { done, value } = await reader.read();
+        const contentLength = response.headers["content-length"];
+        const declaredLength = Array.isArray(contentLength) ? contentLength[0] : contentLength;
 
-    if (done) {
-      return text + decoder.decode();
-    }
+        if (declaredLength && Number(declaredLength) > maxBytes) {
+          response.resume();
+          reject(new Error(`Manifest response is larger than ${maxBytes} bytes.`));
+          return;
+        }
 
-    bytesRead += value.byteLength;
+        response.on("data", (chunk: Uint8Array) => {
+          bytesRead += chunk.byteLength;
 
-    if (bytesRead > maxBytes) {
-      await reader.cancel();
-      throw new Error(`Manifest response is larger than ${maxBytes} bytes.`);
-    }
+          if (bytesRead > maxBytes) {
+            req.destroy(new Error(`Manifest response is larger than ${maxBytes} bytes.`));
+            return;
+          }
 
-    text += decoder.decode(value, { stream: true });
-  }
+          chunks.push(chunk);
+        });
+
+        response.on("end", () => {
+          resolve(decoder.decode(Buffer.concat(chunks)));
+        });
+
+        response.on("error", reject);
+      },
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Manifest fetch timed out after ${timeoutMs}ms.`));
+    });
+
+    req.on("error", reject);
+    req.end();
+  });
 }

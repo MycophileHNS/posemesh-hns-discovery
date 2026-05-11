@@ -1,3 +1,4 @@
+import { parsePublicKey } from "./public-keys.ts";
 import type { ParsedTxtRecords, PosemeshDiscoveryRecord } from "./types.ts";
 
 const POSEMESH_PREFIX = "posemesh:v1";
@@ -78,7 +79,7 @@ export function parsePosemeshTxt(record: string): PosemeshDiscoveryRecord {
     kind: "posemesh",
     version: 1,
     raw: record,
-    publicKeys: publicKey ? [publicKey] : [],
+    publicKeys: publicKey ? [parsePublicKey(publicKey, "TXT field publicKey")] : [],
     capabilities,
   };
 
@@ -113,7 +114,7 @@ export function parseAgentIdentityTxt(record: string): PosemeshDiscoveryRecord {
     capabilities,
   };
 
-  result.manifestUrl = parseHttpsUrl(endpoint, "endpoint");
+  result.agentEndpointUrl = parseHttpsUrl(endpoint, "endpoint");
 
   return result;
 }
@@ -132,12 +133,15 @@ function splitCsv(value: string | undefined): string[] {
 function extractPublicKeys(value: Record<string, unknown>): string[] {
   const publicKeys = optionalStringArray(value.publicKeys, "publicKeys");
   const publicKey = optionalString(value.publicKey, "publicKey");
+  const parsedPublicKeys = publicKeys.map((key, index) =>
+    parsePublicKey(key, `agent-identity field publicKeys[${index}]`),
+  );
 
   if (publicKey) {
-    return [...publicKeys, publicKey];
+    return [...parsedPublicKeys, parsePublicKey(publicKey, "agent-identity field publicKey")];
   }
 
-  return publicKeys;
+  return parsedPublicKeys;
 }
 
 function requiredString(value: unknown, field: string): string {

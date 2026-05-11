@@ -103,6 +103,17 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("rejects malformed public keys", () => {
+    assert.throws(
+      () =>
+        parsePosemeshManifest({
+          version: 1,
+          publicKeys: ["not_a_hex_or_base64_key"],
+        }),
+      /hex or base64/,
+    );
+  });
+
   it("rejects insecure manifest and service URLs", async () => {
     await assert.rejects(
       () => fetchPosemeshManifest("http://example.com/posemesh.json"),

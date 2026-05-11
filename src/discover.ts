@@ -1,5 +1,5 @@
 import { fetchPosemeshManifest } from "./manifest.ts";
-import { assertValidPosemeshName } from "./name.ts";
+import { assertValidPosemeshName, normalizeName } from "./name.ts";
 import { parseTxtRecords } from "./parser.ts";
 import { DnsResolver } from "./resolvers.ts";
 import type {
@@ -17,21 +17,27 @@ export async function discoverPosemesh(
   const resolver = options.resolver ?? new DnsResolver(options.dnsServer);
   const txtRecords = await resolver.resolveTxt(normalizedName);
   const parsedTxt = parseTxtRecords(txtRecords);
-  const firstManifestUrl = parsedTxt.records.find((record) => record.manifestUrl)?.manifestUrl;
   const shouldFetchManifest = options.fetchManifest ?? true;
   const warnings = [...parsedTxt.warnings];
+  const manifestUrl = selectManifestUrl(parsedTxt.records, warnings);
   let manifest: PosemeshManifest | undefined;
 
-  if (firstManifestUrl && shouldFetchManifest) {
+  if (manifestUrl && shouldFetchManifest) {
     try {
       manifest = await (options.manifestFetcher ?? fetchPosemeshManifest)(
-        firstManifestUrl,
+        manifestUrl,
         options.manifestFetchOptions,
       );
+      const identityWarning = validateManifestIdentity(normalizedName, manifest, manifestUrl);
+
+      if (identityWarning) {
+        warnings.push(identityWarning);
+        manifest = undefined;
+      }
     } catch (error) {
       warnings.push({
         source: "manifest",
-        url: firstManifestUrl,
+        url: manifestUrl,
         message: error instanceof Error ? error.message : "Unknown manifest fetch error.",
       });
     }
@@ -43,7 +49,7 @@ export async function discoverPosemesh(
     warnings,
     resolvedAt: (options.now ?? (() => new Date()))().toISOString(),
     ...(manifest ? { manifest } : {}),
-    ...(firstManifestUrl ? { manifestUrl: firstManifestUrl } : {}),
+    ...(manifestUrl ? { manifestUrl } : {}),
   });
 }
 
@@ -59,11 +65,12 @@ interface NormalizeInput {
 function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryResult {
   const txtCapabilities = input.records.flatMap((record) => record.capabilities);
   const txtPublicKeys = input.records.flatMap((record) => record.publicKeys);
+  const agentEndpoints = input.records.flatMap((record) => record.agentEndpointUrl ?? []);
   const serviceEndpoints = collectServiceEndpoints(input.manifest);
 
   return {
     name: input.name,
-    sourceName: input.manifest?.sourceName ?? input.manifest?.name ?? input.name,
+    sourceName: input.manifest?.sourceName ?? input.name,
     regions: input.manifest?.regions ?? [],
     domainManagers: input.manifest?.domainManagers ?? [],
     relays: input.manifest?.relays ?? [],
@@ -86,8 +93,47 @@ function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryRes
     ]),
     ...(input.manifest?.healthCheck ? { healthCheck: input.manifest.healthCheck } : {}),
     ...(input.manifestUrl ? { manifestUrl: input.manifestUrl } : {}),
+    agentEndpoints: uniqueStrings(agentEndpoints),
     resolvedAt: input.resolvedAt,
     warnings: input.warnings,
+  };
+}
+
+function selectManifestUrl(
+  records: ReturnType<typeof parseTxtRecords>["records"],
+  warnings: ReturnType<typeof parseTxtRecords>["warnings"],
+): string | undefined {
+  const manifestUrls = uniqueStrings(records.flatMap((record) => record.manifestUrl ?? []));
+
+  if (manifestUrls.length > 1) {
+    warnings.push({
+      source: "txt",
+      message:
+        "Multiple distinct manifest URLs were found; skipping manifest fetch to avoid DNS TXT record ordering ambiguity.",
+    });
+    return undefined;
+  }
+
+  return manifestUrls[0];
+}
+
+function validateManifestIdentity(
+  name: string,
+  manifest: PosemeshManifest,
+  manifestUrl: string,
+): ReturnType<typeof parseTxtRecords>["warnings"][number] | undefined {
+  if (!manifest.sourceName) {
+    return undefined;
+  }
+
+  if (normalizeName(manifest.sourceName).toLowerCase() === normalizeName(name).toLowerCase()) {
+    return undefined;
+  }
+
+  return {
+    source: "manifest",
+    url: manifestUrl,
+    message: `Manifest sourceName ${manifest.sourceName} does not match requested name ${name}.`,
   };
 }
 

@@ -1,20 +1,30 @@
 import type { PosemeshManifest } from "./types.ts";
 
+const HQ_TXT_KEY = "02aa";
+const HQ_DOMAIN_KEY = "02bb";
+const HQ_RELAY_KEY = "02cc";
+const HQ_RECONSTRUCTION_KEY = "02dd";
+const NILS_AGENT_KEY = "02ee";
+const AMERICA_NORTH_KEY = "02ff";
+const RELAY_DIRECTORY_KEY = "03aa";
+const DOMAIN_DIRECTORY_KEY = "03bb";
+
 export const demoTxtRecords: Record<string, string[]> = {
   "hq.posemesh": [
-    "posemesh:v1; manifest=https://example.com/posemesh/hq.json; publicKey=02HQPOSEMESHDEMO; capabilities=domain-discovery,relay-discovery",
+    `posemesh:v1; manifest=https://example.com/posemesh/hq.json; publicKey=${HQ_TXT_KEY}; capabilities=domain-discovery,relay-discovery`,
   ],
   "nils.posemesh": [
-    "agent-identity:v1={\"version\":1,\"endpoint\":\"https://example.com/posemesh/nils-agent.json\",\"capabilities\":[\"domain-discovery\",\"personal-agent\"]}",
+    `agent-identity:v1={"version":1,"endpoint":"https://example.com/posemesh/nils-agent.json","publicKey":"${NILS_AGENT_KEY}","capabilities":["domain-discovery","personal-agent"]}`,
+    `posemesh:v1; manifest=https://example.com/posemesh/nils-agent.json; publicKey=${NILS_AGENT_KEY}; capabilities=domain-discovery,personal-agent`,
   ],
   "americaNorth.posemesh": [
-    "posemesh:v1; manifest=https://example.com/posemesh/america-north.json; publicKey=02AMERICANORTHPOSEMESH; capabilities=relay-discovery,regional-bootstrap",
+    `posemesh:v1; manifest=https://example.com/posemesh/america-north.json; publicKey=${AMERICA_NORTH_KEY}; capabilities=relay-discovery,regional-bootstrap`,
   ],
   "relays.posemesh": [
-    "posemesh:v1; manifest=https://example.com/posemesh/relays.json; publicKey=02RELAYPOSEMESHDEMO; capabilities=relay-discovery",
+    `posemesh:v1; manifest=https://example.com/posemesh/relays.json; publicKey=${RELAY_DIRECTORY_KEY}; capabilities=relay-discovery`,
   ],
   "domains.posemesh": [
-    "posemesh:v1; manifest=https://example.com/posemesh/domains.json; publicKey=02DOMAINPOSEMESHDEMO; capabilities=domain-discovery",
+    `posemesh:v1; manifest=https://example.com/posemesh/domains.json; publicKey=${DOMAIN_DIRECTORY_KEY}; capabilities=domain-discovery`,
   ],
 };
 
@@ -29,7 +39,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         name: "Posemesh HQ domain manager",
         endpoint: "https://hq.example.com/domain-manager",
         region: "global",
-        publicKey: "02HQDOMAINMANAGER",
+        publicKey: HQ_DOMAIN_KEY,
         capabilities: ["domain-discovery"],
         healthCheck: "https://hq.example.com/domain-manager/health",
       },
@@ -40,7 +50,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         endpoint: "wss://hq.example.com/relay",
         region: "global",
         transport: "wss",
-        publicKey: "02HQRELAY",
+        publicKey: HQ_RELAY_KEY,
         capabilities: ["relay-discovery"],
       },
     ],
@@ -50,7 +60,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         endpoint: "https://reconstruction.example.com/jobs",
         region: "global",
         transport: "https",
-        publicKey: "02HQRECONSTRUCTION",
+        publicKey: HQ_RECONSTRUCTION_KEY,
         capabilities: ["reconstruction"],
       },
     ],
@@ -96,7 +106,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         role: "operator",
       },
     ],
-    publicKeys: ["02HQPOSEMESHDEMO"],
+    publicKeys: [HQ_TXT_KEY],
     capabilities: [
       "domain-discovery",
       "relay-discovery",
@@ -133,7 +143,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         role: "operator",
       },
     ],
-    publicKeys: ["02NILSAGENT"],
+    publicKeys: [NILS_AGENT_KEY],
     capabilities: ["domain-discovery", "personal-agent"],
   },
   "https://example.com/posemesh/america-north.json": {
@@ -182,7 +192,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         transport: "https",
       },
     ],
-    publicKeys: ["02AMERICANORTHPOSEMESH"],
+    publicKeys: [AMERICA_NORTH_KEY],
     capabilities: ["relay-discovery", "regional-bootstrap", "reconstruction", "gaussian-splatting"],
     healthCheck: "https://na.example.com/health",
   },
@@ -199,7 +209,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
       },
     ],
     bootstrapNodes: [],
-    publicKeys: ["02RELAYPOSEMESHDEMO"],
+    publicKeys: [RELAY_DIRECTORY_KEY],
     capabilities: ["relay-discovery"],
   },
   "https://example.com/posemesh/domains.json": {
@@ -215,7 +225,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
     ],
     relays: [],
     bootstrapNodes: [],
-    publicKeys: ["02DOMAINPOSEMESHDEMO"],
+    publicKeys: [DOMAIN_DIRECTORY_KEY],
     capabilities: ["domain-discovery"],
   },
 };

@@ -62,6 +62,7 @@ export interface PosemeshDiscoveryRecord {
   version: 1;
   raw: string;
   manifestUrl?: string;
+  agentEndpointUrl?: string;
   publicKeys: string[];
   capabilities: string[];
 }
@@ -82,6 +83,7 @@ export interface NormalizedDiscoveryResult {
   capabilities: string[];
   healthCheck?: string;
   manifestUrl?: string;
+  agentEndpoints: string[];
   resolvedAt: string;
   warnings: ParseWarning[];
 }
