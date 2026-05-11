@@ -221,6 +221,17 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings[0]?.url, "https://example.com/missing.json");
   });
 
+  it("warns when no TXT records are found", async () => {
+    const result = await discoverPosemesh("missing.posemesh", {
+      resolver: new MockResolver({}),
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(result.publicKeys, []);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0]?.message ?? "", /No TXT records/);
+  });
+
   it("does not fetch an ambiguous manifest when multiple TXT records disagree", async () => {
     let fetchCalls = 0;
 
@@ -273,7 +284,7 @@ describe("discoverPosemesh", () => {
       }),
       manifestFetcher: async () => ({
         version: 1,
-        sourceName: "official.posemesh",
+        sourceName: "mismatch.posemesh",
         relays: [{ endpoint: "wss://relay.example.com" }],
       }),
       now: () => fixedNow,
@@ -283,5 +294,44 @@ describe("discoverPosemesh", () => {
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
     assert.match(result.warnings[0]?.message ?? "", /does not match/);
+  });
+
+  it("drops fetched manifest data when sourceName is missing", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+      }),
+      manifestFetcher: async () => ({
+        version: 1,
+        name: "hq.posemesh",
+        relays: [{ endpoint: "wss://relay.example.com" }],
+      }),
+      now: () => fixedNow,
+    });
+
+    assert.equal(result.sourceName, "hq.posemesh");
+    assert.deepEqual(result.relays, []);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0]?.message ?? "", /sourceName is required/);
+  });
+
+  it("drops fetched manifest data when name conflicts with the requested name", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+      }),
+      manifestFetcher: async () => ({
+        version: 1,
+        sourceName: "hq.posemesh",
+        name: "mismatch.posemesh",
+        relays: [{ endpoint: "wss://relay.example.com" }],
+      }),
+      now: () => fixedNow,
+    });
+
+    assert.equal(result.sourceName, "hq.posemesh");
+    assert.deepEqual(result.relays, []);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0]?.message ?? "", /Manifest name/);
   });
 });

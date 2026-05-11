@@ -16,6 +16,7 @@ export type {
   FetchPosemeshManifestOptions,
   ManifestFetcher,
   ManifestHostResolver,
+  ManifestHttpsRequest,
   ManifestResolvedAddress,
   NormalizedDiscoveryResult,
   PathfindingService,

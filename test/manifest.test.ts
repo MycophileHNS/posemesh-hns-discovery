@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import type { ClientRequest, IncomingMessage } from "node:http";
+import type { RequestOptions } from "node:https";
+import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { fetchPosemeshManifest, parsePosemeshManifest } from "../src/manifest.ts";
+import type { FetchPosemeshManifestOptions } from "../src/types.ts";
 
 describe("Posemesh manifest parsing", () => {
   it("parses Posemesh-oriented node categories", () => {
@@ -142,5 +147,56 @@ describe("Posemesh manifest parsing", () => {
         }),
       /resolves.*private|reserved/,
     );
+  });
+
+  it("fetches manifest JSON through the pinned HTTPS request path", async () => {
+    const body = JSON.stringify({
+      version: 1,
+      sourceName: "hq.posemesh",
+      publicKeys: ["02aa"],
+    });
+    let requestOptions: RequestOptions | undefined;
+
+    const httpsRequest: NonNullable<FetchPosemeshManifestOptions["httpsRequest"]> = ((
+      options: RequestOptions,
+      callback?: (response: IncomingMessage) => void,
+    ) => {
+      requestOptions = options;
+      const req = new EventEmitter() as ClientRequest;
+
+      (req as ClientRequest & { setTimeout: ClientRequest["setTimeout"] }).setTimeout = () => req;
+      (req as ClientRequest & { destroy: ClientRequest["destroy"] }).destroy = (
+        error?: Error,
+      ) => {
+        if (error) {
+          req.emit("error", error);
+        }
+
+        return req;
+      };
+      (req as ClientRequest & { end: ClientRequest["end"] }).end = () => {
+        const response = new PassThrough() as PassThrough & Partial<IncomingMessage>;
+        response.statusCode = 200;
+        response.headers = {
+          "content-length": String(Buffer.byteLength(body)),
+        };
+
+        callback?.(response as IncomingMessage);
+        response.end(body);
+        return req;
+      };
+
+      return req;
+    }) as NonNullable<FetchPosemeshManifestOptions["httpsRequest"]>;
+
+    const manifest = await fetchPosemeshManifest("https://manifest.example.test/posemesh.json", {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest,
+    });
+
+    assert.equal(manifest.sourceName, "hq.posemesh");
+    assert.deepEqual(manifest.publicKeys, ["02aa"]);
+    assert.equal(requestOptions?.hostname, "manifest.example.test");
+    assert.equal(typeof requestOptions?.lookup, "function");
   });
 });

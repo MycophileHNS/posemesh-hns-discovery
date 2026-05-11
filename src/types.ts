@@ -1,3 +1,6 @@
+import type { ClientRequest, IncomingMessage } from "node:http";
+import type { RequestOptions } from "node:https";
+
 export type DiscoveryRecordKind = "posemesh" | "agent-identity";
 
 export interface PosemeshServiceEndpoint {
@@ -110,11 +113,16 @@ export interface ManifestResolvedAddress {
 }
 
 export type ManifestHostResolver = (hostname: string) => Promise<ManifestResolvedAddress[]>;
+export type ManifestHttpsRequest = (
+  options: RequestOptions,
+  callback?: (response: IncomingMessage) => void,
+) => ClientRequest;
 
 export interface FetchPosemeshManifestOptions {
   timeoutMs?: number;
   maxBytes?: number;
   resolveHostname?: ManifestHostResolver;
+  httpsRequest?: ManifestHttpsRequest;
 }
 
 export type ManifestFetcher = (

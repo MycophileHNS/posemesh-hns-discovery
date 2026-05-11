@@ -51,7 +51,7 @@ Handshake helps because the name can remain stable while endpoints, regions, key
 
 The prototype:
 
-- resolves TXT records for a Posemesh-related Handshake name
+- resolves TXT records for subnames under `.posemesh`
 - parses compact `posemesh:v1` TXT records
 - parses `agent-identity:v1` TXT records
 - fetches a remote manifest JSON when a TXT record points to one
@@ -130,7 +130,7 @@ agent-identity:v1={"version":1,"endpoint":"https://example.com/agent.json","publ
 
 In this prototype, `manifest` points to Posemesh discovery JSON. `endpoint` in an `agent-identity:v1` record is kept as an agent endpoint, not treated as a Posemesh manifest unless the name also publishes a separate `posemesh:v1` manifest record.
 
-The example public key is a placeholder hex string. Real records should use the public key format Auki chooses for production.
+The example public key is a placeholder hex string. Public key validation is syntax-only in this prototype; real records should use the key format and wallet binding rules Auki chooses for production.
 
 ## Manifest shape
 
@@ -158,7 +158,7 @@ The manifest schema is intentionally small. It uses service category names obser
 
 Signature verification is intentionally marked as prototype-only work. Production clients should not trust remote manifests without a clear signing and verification policy.
 
-For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, checks hostnames for localhost/private/reserved addresses before fetching, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model; production clients should use stronger network isolation and signed manifests because DNS answers can change over time.
+For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, checks hostnames for localhost/private/reserved addresses, pins the checked address for the request, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model; production clients should use stronger network isolation and signed manifests because DNS answers can change over time.
 
 ## Run the demo
 
@@ -185,6 +185,8 @@ npm run resolve -- hq.posemesh --live --dns-server 127.0.0.1:5350
 ```
 
 That DNS server could be backed by software such as hsd or hnsd, depending on the operator's setup.
+
+If live mode returns no TXT records, first confirm the configured resolver can resolve Handshake names. A normal system DNS resolver may not know about `.posemesh`.
 
 ## Project layout
 

@@ -19,6 +19,7 @@ export async function discoverPosemesh(
   const parsedTxt = parseTxtRecords(txtRecords);
   const shouldFetchManifest = options.fetchManifest ?? true;
   const warnings = [...parsedTxt.warnings];
+  appendDiscoveryRecordWarning(normalizedName, txtRecords, parsedTxt.records, warnings);
   const manifestUrl = selectManifestUrl(parsedTxt.records, warnings);
   let manifest: PosemeshManifest | undefined;
 
@@ -99,6 +100,28 @@ function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryRes
   };
 }
 
+function appendDiscoveryRecordWarning(
+  name: string,
+  txtRecords: string[],
+  records: ReturnType<typeof parseTxtRecords>["records"],
+  warnings: ReturnType<typeof parseTxtRecords>["warnings"],
+): void {
+  if (txtRecords.length === 0) {
+    warnings.push({
+      source: "txt",
+      message: `No TXT records found for ${name}. Live lookups require a Handshake-aware resolver.`,
+    });
+    return;
+  }
+
+  if (records.length === 0 && warnings.length === 0) {
+    warnings.push({
+      source: "txt",
+      message: `No compatible posemesh:v1 or agent-identity:v1 TXT records found for ${name}.`,
+    });
+  }
+}
+
 function selectManifestUrl(
   records: ReturnType<typeof parseTxtRecords>["records"],
   warnings: ReturnType<typeof parseTxtRecords>["warnings"],
@@ -123,10 +146,25 @@ function validateManifestIdentity(
   manifestUrl: string,
 ): ReturnType<typeof parseTxtRecords>["warnings"][number] | undefined {
   if (!manifest.sourceName) {
-    return undefined;
+    return {
+      source: "manifest",
+      url: manifestUrl,
+      message: `Manifest sourceName is required and must match requested name ${name}.`,
+    };
   }
 
   if (normalizeName(manifest.sourceName).toLowerCase() === normalizeName(name).toLowerCase()) {
+    if (
+      manifest.name &&
+      normalizeName(manifest.name).toLowerCase() !== normalizeName(name).toLowerCase()
+    ) {
+      return {
+        source: "manifest",
+        url: manifestUrl,
+        message: `Manifest name ${manifest.name} does not match requested name ${name}.`,
+      };
+    }
+
     return undefined;
   }
 

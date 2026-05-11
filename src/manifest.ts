@@ -8,6 +8,7 @@ import type {
   DomainManager,
   FetchPosemeshManifestOptions,
   ManifestHostResolver,
+  ManifestHttpsRequest,
   ManifestResolvedAddress,
   PathfindingService,
   PosemeshManifest,
@@ -45,6 +46,7 @@ export async function fetchPosemeshManifest(
     manifestUrl.address,
     options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
     maxBytes,
+    options.httpsRequest ?? (request as ManifestHttpsRequest),
   );
   const json = JSON.parse(text) as unknown;
   return parsePosemeshManifest(json);
@@ -426,13 +428,14 @@ function fetchManifestText(
   address: ManifestResolvedAddress,
   timeoutMs: number,
   maxBytes: number,
+  httpsRequest: ManifestHttpsRequest,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Uint8Array[] = [];
     const decoder = new TextDecoder();
     let bytesRead = 0;
 
-    const req = request(
+    const req = httpsRequest(
       {
         protocol: url.protocol,
         hostname: url.hostname,
