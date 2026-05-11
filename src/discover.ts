@@ -31,6 +31,7 @@ export async function discoverPosemesh(
   return normalizeDiscoveryResult({
     name: normalizedName,
     records: parsedTxt.records,
+    warnings: parsedTxt.warnings,
     resolvedAt: (options.now ?? (() => new Date()))().toISOString(),
     ...(manifest ? { manifest } : {}),
     ...(firstManifestUrl ? { manifestUrl: firstManifestUrl } : {}),
@@ -40,6 +41,7 @@ export async function discoverPosemesh(
 interface NormalizeInput {
   name: string;
   records: ReturnType<typeof parseTxtRecords>["records"];
+  warnings: ReturnType<typeof parseTxtRecords>["warnings"];
   manifest?: PosemeshManifest;
   manifestUrl?: string;
   resolvedAt: string;
@@ -76,6 +78,7 @@ function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryRes
     ...(input.manifest?.healthCheck ? { healthCheck: input.manifest.healthCheck } : {}),
     ...(input.manifestUrl ? { manifestUrl: input.manifestUrl } : {}),
     resolvedAt: input.resolvedAt,
+    warnings: input.warnings,
   };
 }
 

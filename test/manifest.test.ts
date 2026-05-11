@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parsePosemeshManifest } from "../src/manifest.ts";
+import { fetchPosemeshManifest, parsePosemeshManifest } from "../src/manifest.ts";
 
 describe("Posemesh manifest parsing", () => {
   it("parses Auki-shaped node categories", () => {
@@ -90,6 +90,31 @@ describe("Posemesh manifest parsing", () => {
         reconstructionNodes: [{ id: "missing-endpoint" }],
       }),
       /reconstructionNodes\.endpoint/,
+    );
+  });
+
+  it("rejects non-string list items instead of dropping them", () => {
+    assert.throws(
+      () => parsePosemeshManifest({
+        version: 1,
+        capabilities: ["relay-discovery", 123],
+      }),
+      /string list item 1/,
+    );
+  });
+
+  it("rejects insecure manifest and service URLs", async () => {
+    await assert.rejects(
+      () => fetchPosemeshManifest("http://example.com/posemesh.json"),
+      /https/,
+    );
+
+    assert.throws(
+      () => parsePosemeshManifest({
+        version: 1,
+        relays: [{ endpoint: "http://relay.example.com" }],
+      }),
+      /relays\.endpoint/,
     );
   });
 });

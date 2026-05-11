@@ -93,6 +93,7 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.equal(result.manifestUrl, "https://example.com/posemesh.json");
     assert.equal(result.resolvedAt, fixedNow.toISOString());
+    assert.deepEqual(result.warnings, []);
     assert.equal(result.domainManagers.length, 1);
     assert.equal(result.relays.length, 1);
     assert.equal(result.reconstructionNodes.length, 1);
@@ -149,5 +150,23 @@ describe("discoverPosemesh", () => {
     assert.deepEqual(result.pathfindingServices, []);
     assert.deepEqual(result.publicKeys, ["TXT_KEY"]);
     assert.deepEqual(result.capabilities, ["relay-discovery"]);
+    assert.deepEqual(result.warnings, []);
+  });
+
+  it("surfaces TXT parse warnings in the normalized result", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": [
+          "posemesh:v1; broken",
+          "posemesh:v1; publicKey=TXT_KEY",
+        ],
+      }),
+      fetchManifest: false,
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(result.publicKeys, ["TXT_KEY"]);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
   });
 });

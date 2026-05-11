@@ -8,7 +8,8 @@ export interface NameValidationResult {
   error?: string;
 }
 
-const HANDSHAKE_LABEL = /^[a-z0-9][a-z0-9-]{0,62}$/i;
+const HANDSHAKE_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+const MAX_DNS_NAME_LENGTH = 253;
 
 export function normalizeName(name: string): string {
   return name.trim().replace(/\.$/, "");
@@ -24,13 +25,17 @@ export function validatePosemeshName(
     return { ok: false, error: "Name is required." };
   }
 
+  if (normalizedName.length > MAX_DNS_NAME_LENGTH) {
+    return { ok: false, error: "Name is too long for DNS." };
+  }
+
   const labels = normalizedName.split(".");
   const invalidLabel = labels.find((label) => !HANDSHAKE_LABEL.test(label));
 
-  if (invalidLabel) {
+  if (invalidLabel !== undefined) {
     return {
       ok: false,
-      error: `Invalid Handshake label: ${invalidLabel}`,
+      error: `Invalid Handshake label: ${invalidLabel || "(empty)"}`,
     };
   }
 

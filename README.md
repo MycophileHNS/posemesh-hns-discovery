@@ -23,6 +23,8 @@ This prototype explores another option: publish a small machine-readable discove
 
 The result is a stable name that can keep working even when the infrastructure behind it moves.
 
+Live lookups require a Handshake-aware DNS resolver or resolver API. The default demo uses mock records so reviewers can understand the flow without setting up Handshake infrastructure.
+
 ## Why Handshake + .auki matters for Posemesh
 
 An Auki-controlled Handshake name such as `.auki` could become a resilient discovery root for the Auki and Posemesh ecosystem.
@@ -33,7 +35,7 @@ The useful idea is:
 
 > A Handshake name can act as an owner-controlled discovery and identity anchor for Auki-operated and community-operated Posemesh infrastructure.
 
-For example, if Auki chose to use `.auki` or another Auki-controlled Handshake name, it could publish discovery records such as:
+These are hypothetical examples only. This repository does not control `.auki`, does not claim Auki has chosen this namespace, and does not publish official Auki records. If Auki chose to use `.auki` or another Auki-controlled Handshake name, it could publish discovery records such as:
 
 - `posemesh.auki`: canonical Posemesh discovery manifest
 - `relays.posemesh.auki`: Relay/Hagall discovery
@@ -55,6 +57,7 @@ The prototype:
 - fetches a remote manifest JSON when a TXT record points to one
 - validates Auki-shaped service categories in the manifest
 - returns one normalized discovery result
+- reports TXT parse warnings instead of silently hiding malformed records
 - includes mock records so the demo works without live Handshake records
 
 The normalized result can include:
@@ -73,6 +76,7 @@ The normalized result can include:
 - health check URL
 - manifest URL
 - resolution timestamp
+- parse warnings
 
 ## What this prototype proves
 
@@ -150,6 +154,8 @@ The manifest schema is intentionally small, but it now mirrors Auki's public ser
 ```
 
 Signature verification is intentionally marked as prototype-only work. Production clients should not trust remote manifests without a clear signing and verification policy.
+
+For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model.
 
 ## Run the demo
 

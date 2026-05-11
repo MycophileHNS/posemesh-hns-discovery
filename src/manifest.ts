@@ -11,18 +11,34 @@ import type {
   WalletReference,
 } from "./types.ts";
 
-export async function fetchPosemeshManifest(url: string): Promise<PosemeshManifest> {
+const DEFAULT_MANIFEST_TIMEOUT_MS = 5_000;
+const DEFAULT_MANIFEST_MAX_BYTES = 128 * 1024;
+
+export interface FetchPosemeshManifestOptions {
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+export async function fetchPosemeshManifest(
+  url: string,
+  options: FetchPosemeshManifestOptions = {},
+): Promise<PosemeshManifest> {
+  assertSafeManifestUrl(url);
+
+  const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
   const response = await fetch(url, {
     headers: {
       accept: "application/json",
     },
+    redirect: "error",
+    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {
     throw new Error(`Manifest fetch failed for ${url}: HTTP ${response.status}`);
   }
 
-  const json = await response.json();
+  const json = JSON.parse(await readLimitedText(response, maxBytes)) as unknown;
   return parsePosemeshManifest(json);
 }
 
@@ -56,7 +72,7 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     wallets: parseWallets(value.wallets),
     publicKeys: parseStringArray(value.publicKeys),
     capabilities: parseStringArray(value.capabilities),
-    ...optionalStringField(value, "healthCheck"),
+    ...optionalUrlField(value, "healthCheck", ["https:"]),
     ...optionalStringField(value, "signature"),
   };
 
@@ -112,12 +128,12 @@ function parseServiceEndpoint<T extends PosemeshServiceEndpoint>(
   const endpoint: PosemeshServiceEndpoint = {
     ...optionalStringField(value, "id"),
     ...optionalStringField(value, "name"),
-    endpoint: requiredStringField(value, "endpoint", field),
+    endpoint: requiredUrlField(value, "endpoint", field, ["https:", "wss:"]),
     ...optionalStringField(value, "region"),
     ...optionalStringField(value, "transport"),
     ...optionalStringField(value, "publicKey"),
     capabilities: parseStringArray(value.capabilities),
-    ...optionalStringField(value, "healthCheck"),
+    ...optionalUrlField(value, "healthCheck", ["https:"]),
   };
 
   return endpoint as T;
@@ -159,7 +175,13 @@ function parseStringArray(value: unknown): string[] {
     throw new Error("Manifest string list must be an array.");
   }
 
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return value.map((item, index) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`Manifest string list item ${index} must be a non-empty string.`);
+    }
+
+    return item.trim();
+  });
 }
 
 function requiredStringField(
@@ -176,19 +198,117 @@ function requiredStringField(
   return item.trim();
 }
 
+function requiredUrlField(
+  value: Record<string, unknown>,
+  field: string,
+  parent: string,
+  protocols: string[],
+): string {
+  return validateUrl(requiredStringField(value, field, parent), `${parent}.${field}`, protocols);
+}
+
 function optionalStringField<T extends string>(
   value: Record<string, unknown>,
   field: T,
 ): Partial<Record<T, string>> {
   const item = value[field];
 
-  if (typeof item !== "string" || !item.trim()) {
+  if (item === undefined) {
     return {};
+  }
+
+  if (typeof item !== "string" || !item.trim()) {
+    throw new Error(`Manifest field ${field} must be a non-empty string.`);
   }
 
   return { [field]: item.trim() } as Partial<Record<T, string>>;
 }
 
+function optionalUrlField<T extends string>(
+  value: Record<string, unknown>,
+  field: T,
+  protocols: string[],
+): Partial<Record<T, string>> {
+  const stringField = optionalStringField(value, field);
+  const item = stringField[field];
+
+  if (!item) {
+    return {};
+  }
+
+  return {
+    [field]: validateUrl(item, field, protocols),
+  } as Partial<Record<T, string>>;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertSafeManifestUrl(url: string): void {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Manifest URL is invalid: ${url}`);
+  }
+
+  if (!isAllowedProtocol(parsed.protocol, ["https:"])) {
+    throw new Error("Manifest URL must use https.");
+  }
+}
+
+function validateUrl(url: string, field: string, protocols: string[]): string {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Manifest field ${field} must be a valid URL.`);
+  }
+
+  if (!isAllowedProtocol(parsed.protocol, protocols)) {
+    throw new Error(`Manifest field ${field} must use ${protocols.join(" or ")}.`);
+  }
+
+  return url;
+}
+
+function isAllowedProtocol(protocol: string, protocols: string[]): boolean {
+  return protocols.includes(protocol);
+}
+
+async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+
+  if (contentLength && Number(contentLength) > maxBytes) {
+    throw new Error(`Manifest response is larger than ${maxBytes} bytes.`);
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      return text + decoder.decode();
+    }
+
+    bytesRead += value.byteLength;
+
+    if (bytesRead > maxBytes) {
+      await reader.cancel();
+      throw new Error(`Manifest response is larger than ${maxBytes} bytes.`);
+    }
+
+    text += decoder.decode(value, { stream: true });
+  }
 }

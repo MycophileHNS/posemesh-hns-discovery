@@ -24,6 +24,12 @@ describe(".posemesh name validation", () => {
     assert.match(result.error ?? "", /\.posemesh/);
   });
 
+  it("rejects empty labels and labels ending in hyphen", () => {
+    for (const name of ["foo..posemesh", ".posemesh", "bad-.posemesh"]) {
+      assert.equal(validatePosemeshName(name).ok, false, name);
+    }
+  });
+
   it("accepts other Handshake names when allowAnyHandshakeName is true", () => {
     const result = validatePosemeshName("example.hns", {
       allowAnyHandshakeName: true,

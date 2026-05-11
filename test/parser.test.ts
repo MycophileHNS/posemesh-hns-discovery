@@ -38,6 +38,7 @@ describe("TXT parsing", () => {
 
     assert.equal(result.records.length, 1);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
     assert.deepEqual(result.records[0]?.capabilities, ["relay-discovery"]);
   });
 });

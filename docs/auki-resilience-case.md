@@ -14,7 +14,7 @@ This prototype now shows one concrete path:
 
 1. Resolve TXT records for a `.posemesh` name.
 2. Parse versioned Posemesh or agent identity metadata.
-3. Fetch a signed or signable manifest.
+3. Fetch a manifest that could later be signed and verified.
 4. Return normalized service discovery data for clients, tools, robots, and agents.
 
 The manifest schema has been expanded beyond generic relays and domain managers to include Auki-shaped categories: reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, wallets, regions, and health checks.
@@ -49,7 +49,7 @@ For example:
 - `domains.posemesh` can publish domain manager endpoints.
 - `relays.posemesh` can publish Relay/Hagall endpoints.
 - `americaNorth.posemesh` can publish regional relays, bootstrap nodes, and compute services.
-- `hq.posemesh` can publish a canonical Auki-operated manifest.
+- `hq.posemesh` can represent a hypothetical Auki-operated manifest.
 - `nils.posemesh` can publish a person, maintainer, test operator, or agent identity.
 
 Those names are headless. Agents, CLIs, robots, services, and test tools can resolve and use them through DNS, resolver APIs, or Handshake-aware infrastructure. Browser support is a user-experience layer, not a hard requirement for the integration.
@@ -144,7 +144,7 @@ This would make discovery useful to `reconstruction-server`, `splatter-server`, 
 
 Use naming levels to separate trust:
 
-- `hq.posemesh`: Auki-operated canonical manifest.
+- `hq.posemesh`: hypothetical Auki-operated canonical manifest.
 - `relays.posemesh`: curated relay directory.
 - `domains.posemesh`: curated domain manager directory.
 - `<operator>.posemesh`: independent operator identity.

@@ -83,6 +83,7 @@ export interface NormalizedDiscoveryResult {
   healthCheck?: string;
   manifestUrl?: string;
   resolvedAt: string;
+  warnings: ParseWarning[];
 }
 
 export interface TxtResolver {
