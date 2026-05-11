@@ -1,8 +1,14 @@
 import type {
   BootstrapNode,
   DomainManager,
+  PathfindingService,
   PosemeshManifest,
+  PosemeshServiceEndpoint,
+  ReconstructionNode,
   Relay,
+  SplatterNode,
+  VlmNode,
+  WalletReference,
 } from "./types.ts";
 
 export async function fetchPosemeshManifest(url: string): Promise<PosemeshManifest> {
@@ -33,11 +39,24 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     version: 1,
     ...optionalStringField(value, "name"),
     ...optionalStringField(value, "sourceName"),
+    regions: parseStringArray(value.regions),
     domainManagers: parseDomainManagers(value.domainManagers),
     relays: parseRelays(value.relays),
+    reconstructionNodes: parseServiceEndpoints<ReconstructionNode>(
+      value.reconstructionNodes,
+      "reconstructionNodes",
+    ),
+    splatterNodes: parseServiceEndpoints<SplatterNode>(value.splatterNodes, "splatterNodes"),
+    vlmNodes: parseVlmNodes(value.vlmNodes),
+    pathfindingServices: parseServiceEndpoints<PathfindingService>(
+      value.pathfindingServices,
+      "pathfindingServices",
+    ),
     bootstrapNodes: parseBootstrapNodes(value.bootstrapNodes),
+    wallets: parseWallets(value.wallets),
     publicKeys: parseStringArray(value.publicKeys),
     capabilities: parseStringArray(value.capabilities),
+    ...optionalStringField(value, "healthCheck"),
     ...optionalStringField(value, "signature"),
   };
 
@@ -47,31 +66,68 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
 }
 
 function parseDomainManagers(value: unknown): DomainManager[] {
-  return parseObjectArray(value, "domainManagers").map((item) => ({
-    ...optionalStringField(item, "id"),
-    ...optionalStringField(item, "name"),
-    endpoint: requiredStringField(item, "endpoint", "domainManagers"),
-    ...optionalStringField(item, "region"),
-    ...optionalStringField(item, "publicKey"),
-    capabilities: parseStringArray(item.capabilities),
-  }));
+  return parseObjectArray(value, "domainManagers").map((item) => {
+    return {
+      ...parseServiceEndpoint<DomainManager>(item, "domainManagers"),
+      ...optionalStringField(item, "wallet"),
+    };
+  });
 }
 
 function parseRelays(value: unknown): Relay[] {
-  return parseObjectArray(value, "relays").map((item) => ({
-    ...optionalStringField(item, "id"),
-    endpoint: requiredStringField(item, "endpoint", "relays"),
-    ...optionalStringField(item, "region"),
-    ...optionalStringField(item, "transport"),
-    ...optionalStringField(item, "publicKey"),
-  }));
+  return parseObjectArray(value, "relays").map((item) => {
+    return {
+      ...parseServiceEndpoint<Relay>(item, "relays"),
+      ...optionalStringField(item, "sessionPolicy"),
+    };
+  });
 }
 
 function parseBootstrapNodes(value: unknown): BootstrapNode[] {
-  return parseObjectArray(value, "bootstrapNodes").map((item) => ({
-    ...optionalStringField(item, "id"),
-    endpoint: requiredStringField(item, "endpoint", "bootstrapNodes"),
-    ...optionalStringField(item, "transport"),
+  return parseServiceEndpoints<BootstrapNode>(value, "bootstrapNodes");
+}
+
+function parseVlmNodes(value: unknown): VlmNode[] {
+  return parseObjectArray(value, "vlmNodes").map((item) => {
+    const models = parseStringArray(item.models);
+
+    return {
+      ...parseServiceEndpoint<VlmNode>(item, "vlmNodes"),
+      ...(models.length > 0 ? { models } : {}),
+    };
+  });
+}
+
+function parseServiceEndpoints<T extends PosemeshServiceEndpoint>(
+  value: unknown,
+  field: string,
+): T[] {
+  return parseObjectArray(value, field).map((item) => parseServiceEndpoint<T>(item, field));
+}
+
+function parseServiceEndpoint<T extends PosemeshServiceEndpoint>(
+  value: Record<string, unknown>,
+  field: string,
+): T {
+  const endpoint: PosemeshServiceEndpoint = {
+    ...optionalStringField(value, "id"),
+    ...optionalStringField(value, "name"),
+    endpoint: requiredStringField(value, "endpoint", field),
+    ...optionalStringField(value, "region"),
+    ...optionalStringField(value, "transport"),
+    ...optionalStringField(value, "publicKey"),
+    capabilities: parseStringArray(value.capabilities),
+    ...optionalStringField(value, "healthCheck"),
+  };
+
+  return endpoint as T;
+}
+
+function parseWallets(value: unknown): WalletReference[] {
+  return parseObjectArray(value, "wallets").map((item) => ({
+    address: requiredStringField(item, "address", "wallets"),
+    ...optionalStringField(item, "chain"),
+    ...optionalStringField(item, "role"),
     ...optionalStringField(item, "publicKey"),
   }));
 }

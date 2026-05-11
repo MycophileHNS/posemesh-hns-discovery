@@ -32,6 +32,37 @@ describe("discoverPosemesh", () => {
           publicKey: "RELAY_KEY",
         },
       ],
+      reconstructionNodes: [
+        {
+          id: "reconstruction-1",
+          endpoint: "https://hq.example.com/reconstruction",
+          publicKey: "RECONSTRUCTION_KEY",
+          capabilities: ["reconstruction"],
+        },
+      ],
+      splatterNodes: [
+        {
+          id: "splatter-1",
+          endpoint: "https://hq.example.com/splatter",
+          capabilities: ["gaussian-splatting"],
+        },
+      ],
+      vlmNodes: [
+        {
+          id: "vlm-1",
+          endpoint: "wss://hq.example.com/vlm",
+          transport: "wss",
+          capabilities: ["vlm-inference"],
+          models: ["moondream:1.8b"],
+        },
+      ],
+      pathfindingServices: [
+        {
+          id: "pathfinding-1",
+          endpoint: "https://hq.example.com/pathfinding",
+          capabilities: ["pathfinding"],
+        },
+      ],
       bootstrapNodes: [
         {
           id: "bootstrap-1",
@@ -39,8 +70,17 @@ describe("discoverPosemesh", () => {
           transport: "https",
         },
       ],
+      wallets: [
+        {
+          address: "wallet-1",
+          chain: "posemesh",
+          role: "operator",
+          publicKey: "WALLET_KEY",
+        },
+      ],
       publicKeys: ["MANIFEST_KEY"],
       capabilities: ["regional-bootstrap"],
+      healthCheck: "https://hq.example.com/health",
     };
 
     const result = await discoverPosemesh("hq.posemesh", {
@@ -55,17 +95,29 @@ describe("discoverPosemesh", () => {
     assert.equal(result.resolvedAt, fixedNow.toISOString());
     assert.equal(result.domainManagers.length, 1);
     assert.equal(result.relays.length, 1);
+    assert.equal(result.reconstructionNodes.length, 1);
+    assert.equal(result.splatterNodes.length, 1);
+    assert.equal(result.vlmNodes.length, 1);
+    assert.equal(result.pathfindingServices.length, 1);
     assert.equal(result.bootstrapNodes.length, 1);
+    assert.equal(result.wallets.length, 1);
+    assert.equal(result.healthCheck, "https://hq.example.com/health");
     assert.deepEqual(result.publicKeys, [
       "TXT_KEY",
       "MANIFEST_KEY",
+      "WALLET_KEY",
       "MANAGER_KEY",
       "RELAY_KEY",
+      "RECONSTRUCTION_KEY",
     ]);
     assert.deepEqual(result.capabilities, [
       "domain-discovery",
       "relay-discovery",
       "regional-bootstrap",
+      "reconstruction",
+      "gaussian-splatting",
+      "vlm-inference",
+      "pathfinding",
     ]);
   });
 
@@ -91,6 +143,10 @@ describe("discoverPosemesh", () => {
 
     assert.equal(result.manifestUrl, "https://example.com/relays.json");
     assert.deepEqual(result.relays, []);
+    assert.deepEqual(result.reconstructionNodes, []);
+    assert.deepEqual(result.splatterNodes, []);
+    assert.deepEqual(result.vlmNodes, []);
+    assert.deepEqual(result.pathfindingServices, []);
     assert.deepEqual(result.publicKeys, ["TXT_KEY"]);
     assert.deepEqual(result.capabilities, ["relay-discovery"]);
   });

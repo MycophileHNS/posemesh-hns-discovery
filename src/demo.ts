@@ -22,6 +22,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
   "https://example.com/posemesh/hq.json": {
     version: 1,
     sourceName: "hq.posemesh",
+    regions: ["global"],
     domainManagers: [
       {
         id: "hq-domain-manager",
@@ -30,6 +31,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         region: "global",
         publicKey: "02HQDOMAINMANAGER",
         capabilities: ["domain-discovery"],
+        healthCheck: "https://hq.example.com/domain-manager/health",
       },
     ],
     relays: [
@@ -39,6 +41,45 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         region: "global",
         transport: "wss",
         publicKey: "02HQRELAY",
+        capabilities: ["relay-discovery"],
+      },
+    ],
+    reconstructionNodes: [
+      {
+        id: "hq-reconstruction",
+        endpoint: "https://reconstruction.example.com/jobs",
+        region: "global",
+        transport: "https",
+        publicKey: "02HQRECONSTRUCTION",
+        capabilities: ["reconstruction"],
+      },
+    ],
+    splatterNodes: [
+      {
+        id: "hq-splatter",
+        endpoint: "https://splatter.example.com/jobs",
+        region: "global",
+        transport: "https",
+        capabilities: ["gaussian-splatting"],
+      },
+    ],
+    vlmNodes: [
+      {
+        id: "hq-vlm",
+        endpoint: "wss://vlm.example.com/api/v1/ws",
+        region: "global",
+        transport: "wss",
+        capabilities: ["vlm-inference"],
+        models: ["moondream:1.8b"],
+      },
+    ],
+    pathfindingServices: [
+      {
+        id: "hq-pathfinding",
+        endpoint: "https://pathfinding.example.com/route",
+        region: "global",
+        transport: "https",
+        capabilities: ["pathfinding"],
       },
     ],
     bootstrapNodes: [
@@ -48,12 +89,28 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         transport: "https",
       },
     ],
+    wallets: [
+      {
+        address: "auki-wallet-demo-hq",
+        chain: "posemesh",
+        role: "operator",
+      },
+    ],
     publicKeys: ["02HQPOSEMESHDEMO"],
-    capabilities: ["domain-discovery", "relay-discovery"],
+    capabilities: [
+      "domain-discovery",
+      "relay-discovery",
+      "reconstruction",
+      "gaussian-splatting",
+      "vlm-inference",
+      "pathfinding",
+    ],
+    healthCheck: "https://hq.example.com/health",
   },
   "https://example.com/posemesh/nils-agent.json": {
     version: 1,
     sourceName: "nils.posemesh",
+    regions: ["personal"],
     domainManagers: [
       {
         id: "nils-domain-manager",
@@ -69,12 +126,20 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         transport: "https",
       },
     ],
+    wallets: [
+      {
+        address: "nils-wallet-demo",
+        chain: "posemesh",
+        role: "operator",
+      },
+    ],
     publicKeys: ["02NILSAGENT"],
     capabilities: ["domain-discovery", "personal-agent"],
   },
   "https://example.com/posemesh/america-north.json": {
     version: 1,
     sourceName: "americaNorth.posemesh",
+    regions: ["north-america"],
     domainManagers: [],
     relays: [
       {
@@ -82,12 +147,32 @@ export const demoManifests: Record<string, PosemeshManifest> = {
         endpoint: "wss://na1.example.com/posemesh-relay",
         region: "North America",
         transport: "wss",
+        capabilities: ["relay-discovery"],
       },
       {
         id: "america-north-relay-2",
         endpoint: "wss://na2.example.com/posemesh-relay",
         region: "North America",
         transport: "wss",
+        capabilities: ["relay-discovery"],
+      },
+    ],
+    reconstructionNodes: [
+      {
+        id: "america-north-reconstruction",
+        endpoint: "https://na-reconstruction.example.com/jobs",
+        region: "North America",
+        transport: "https",
+        capabilities: ["reconstruction"],
+      },
+    ],
+    splatterNodes: [
+      {
+        id: "america-north-splatter",
+        endpoint: "https://na-splatter.example.com/jobs",
+        region: "North America",
+        transport: "https",
+        capabilities: ["gaussian-splatting"],
       },
     ],
     bootstrapNodes: [
@@ -98,16 +183,19 @@ export const demoManifests: Record<string, PosemeshManifest> = {
       },
     ],
     publicKeys: ["02AMERICANORTHPOSEMESH"],
-    capabilities: ["relay-discovery", "regional-bootstrap"],
+    capabilities: ["relay-discovery", "regional-bootstrap", "reconstruction", "gaussian-splatting"],
+    healthCheck: "https://na.example.com/health",
   },
   "https://example.com/posemesh/relays.json": {
     version: 1,
     sourceName: "relays.posemesh",
+    regions: ["global"],
     relays: [
       {
         id: "relay-directory",
         endpoint: "https://relays.example.com/directory.json",
         transport: "https",
+        capabilities: ["relay-discovery"],
       },
     ],
     bootstrapNodes: [],
@@ -117,6 +205,7 @@ export const demoManifests: Record<string, PosemeshManifest> = {
   "https://example.com/posemesh/domains.json": {
     version: 1,
     sourceName: "domains.posemesh",
+    regions: ["global"],
     domainManagers: [
       {
         id: "domain-directory",

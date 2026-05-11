@@ -1,40 +1,115 @@
 # posemesh-hns-discovery
 
-`posemesh-hns-discovery` is a small open-source proof of concept for discussing how a Handshake name such as `.posemesh` could act as a decentralized discovery and identity layer for Posemesh.
+`posemesh-hns-discovery` is an unofficial proof of concept that shows how Handshake names could help Posemesh clients, tools, robots, and agents discover Auki/Posemesh services without depending on one central directory.
 
-This is not official Auki software. It is not a production Posemesh SDK fork. It is a standalone prototype for conversation, testing, and architecture exploration.
+This is not official Auki software. It is not endorsed by Auki Labs. It is not a production Posemesh SDK fork. It is a small discussion prototype.
 
-## What This Does
+## Five-minute summary
 
-The prototype resolves TXT records for names under `.posemesh`, parses Posemesh discovery metadata, optionally fetches a remote manifest JSON file, and returns one normalized object with the services a client or agent might need:
+Posemesh is decentralized physical-world infrastructure. It includes domain servers, relays, reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, bootstrap nodes, wallets, and public keys.
 
+Software that wants to use Posemesh needs a way to answer simple questions:
+
+- Where are the relays?
+- Which domain managers are available?
+- Which region should I use?
+- Which compute nodes can do reconstruction or splatting?
+- Which public keys identify the operator?
+- Which endpoint should a robot, SDK, or agent call first?
+
+Today, answers like that can come from a console, a central API, a config file, or documentation. Those are useful, but they can also become single points of discovery.
+
+This prototype explores another option: publish a small machine-readable discovery record in Handshake DNS TXT records. That TXT record can point to a JSON manifest. The manifest lists Posemesh service endpoints, capabilities, wallets, keys, regions, and health checks.
+
+The result is a stable name that can keep working even when the infrastructure behind it moves.
+
+## Why Handshake + .auki matters for Posemesh
+
+An Auki-controlled Handshake name such as `.auki` could become a resilient discovery root for the Auki and Posemesh ecosystem.
+
+The important idea is not “make a website resolve in a browser.” These names are headless. Agents, CLIs, SDKs, robots, and services can resolve them through DNS, resolver APIs, or Handshake-aware infrastructure.
+
+The useful idea is:
+
+> A Handshake name can act as an owner-controlled discovery and identity anchor for Auki-operated and community-operated Posemesh infrastructure.
+
+For example, if Auki chose to use `.auki` or another Auki-controlled Handshake name, it could publish discovery records such as:
+
+- `posemesh.auki`: canonical Posemesh discovery manifest
+- `relays.posemesh.auki`: Relay/Hagall discovery
+- `domains.posemesh.auki`: domain manager discovery
+- `america-north.posemesh.auki`: regional services and bootstrap nodes
+- `compute.posemesh.auki`: reconstruction, splatter, VLM, and pathfinding services
+
+This repository currently demos `.posemesh` names such as `hq.posemesh`, `relays.posemesh`, and `americaNorth.posemesh`. The same discovery pattern could be adapted to `.auki` if Auki wanted a broader organization-level namespace.
+
+Handshake helps because the name can remain stable while endpoints, regions, keys, and service operators change. That makes Posemesh more resilient to API moves, cloud migrations, service reorganization, and future community-operated infrastructure.
+
+## What this prototype does
+
+The prototype:
+
+- resolves TXT records for a Posemesh-related Handshake name
+- parses compact `posemesh:v1` TXT records
+- parses `agent-identity:v1` TXT records
+- fetches a remote manifest JSON when a TXT record points to one
+- validates Auki-shaped service categories in the manifest
+- returns one normalized discovery result
+- includes mock records so the demo works without live Handshake records
+
+The normalized result can include:
+
+- regions
 - domain managers
 - relays
+- reconstruction nodes
+- splatter nodes
+- VLM nodes
+- pathfinding services
 - bootstrap nodes
+- wallets
 - public keys
 - capabilities
+- health check URL
 - manifest URL
 - resolution timestamp
 
-The demo works without live `.posemesh` records. By default, the CLI uses mock records for names such as `hq.posemesh`, `nils.posemesh`, and `americaNorth.posemesh`.
+## What this prototype proves
 
-## Why Handshake + .posemesh Matters
+This prototype proves the basic discovery flow:
 
-Posemesh is described by Auki Labs as a decentralized machine perception network and collaborative spatial computing protocol. A discovery layer for such a network needs names that can be controlled by their owners, resolved by tools, and read by agents without depending on one application server.
+1. A stable Handshake name can point to Posemesh discovery metadata.
+2. The metadata can be small enough to fit in TXT records.
+3. TXT records can point to richer manifest JSON.
+4. The manifest can describe actual Auki/Posemesh node categories.
+5. A client can normalize all of that into one predictable object.
 
-Handshake can provide the naming layer. A `.posemesh` name could publish machine-readable TXT records that point to current Posemesh discovery data. That lets a name act as a stable identity anchor while the actual service endpoints, relays, bootstrap nodes, or public keys can evolve over time.
+It also proves that this can be done as a separate layer. The prototype does not modify Posemesh, hsd, hnsd, or any Auki repository.
 
-For example:
+The practical value is resilience. A Posemesh client could discover where to go next from a name instead of depending only on a central service directory.
 
-- `hq.posemesh` could identify a public headquarters or canonical directory.
-- `nils.posemesh` could identify a person, maintainer, agent, or test operator.
-- `americaNorth.posemesh` could identify regional relays and bootstrap nodes.
-- `relays.posemesh` could publish a relay directory.
-- `domains.posemesh` could publish domain manager discovery data.
+For a longer Auki-facing argument, see [`docs/auki-resilience-case.md`](docs/auki-resilience-case.md).
 
-These names are headless. Agents and command-line tools can resolve and use them through DNS, resolver APIs, or Handshake-aware infrastructure. Browser user experience is a separate concern, not a limitation of the names themselves.
+## What Auki would need to productionize
 
-## Supported TXT Records
+A production version would need Auki-owned decisions and engineering work beyond this prototype:
+
+- choose the official namespace, such as `.auki`, `.posemesh`, or another Auki-controlled Handshake name
+- define a stable metadata specification and versioning policy
+- decide which names are official, curated, experimental, or community-owned
+- publish live Handshake records controlled by the right operators
+- sign manifests and verify signatures in clients
+- define key rotation and revocation rules
+- bind service operators to wallets and public keys
+- define health check, cache, TTL, and failover behavior
+- document resolver behavior for no records, lookup errors, parse errors, manifest fetch errors, and signature failures
+- test compatibility with real Posemesh SDKs and deployed services
+- complete a security review for endpoint trust, replay behavior, downgrade behavior, and operator impersonation
+- decide how this complements the Posemesh Console and existing APIs
+
+Until those decisions are made, this repository should remain an unofficial prototype for discussion.
+
+## TXT record examples
 
 Compact Posemesh discovery record:
 
@@ -48,27 +123,35 @@ Agent identity record:
 agent-identity:v1={"version":1,"endpoint":"https://example.com/agent.json","capabilities":["domain-discovery","relay-discovery"]}
 ```
 
-In this prototype, `manifest` and `endpoint` both point to a JSON manifest that can add structured domain managers, relays, bootstrap nodes, public keys, and capabilities.
+In this prototype, `manifest` and `endpoint` both point to a JSON manifest that can add structured service data.
 
-## Normalized Result
+## Manifest shape
 
-The main library function returns:
+The manifest schema is intentionally small, but it now mirrors Auki's public service categories more closely:
 
-```ts
+```json
 {
-  name: string;
-  sourceName: string;
-  domainManagers: DomainManager[];
-  relays: Relay[];
-  bootstrapNodes: BootstrapNode[];
-  publicKeys: string[];
-  capabilities: string[];
-  manifestUrl?: string;
-  resolvedAt: string;
+  "version": 1,
+  "sourceName": "americaNorth.posemesh",
+  "regions": ["north-america"],
+  "domainManagers": [],
+  "relays": [],
+  "reconstructionNodes": [],
+  "splatterNodes": [],
+  "vlmNodes": [],
+  "pathfindingServices": [],
+  "bootstrapNodes": [],
+  "wallets": [],
+  "publicKeys": [],
+  "capabilities": [],
+  "healthCheck": "https://example.com/health",
+  "signature": "TODO"
 }
 ```
 
-## Run The Demo
+Signature verification is intentionally marked as prototype-only work. Production clients should not trust remote manifests without a clear signing and verification policy.
+
+## Run the demo
 
 This project can run on recent Node.js versions that support built-in TypeScript transforms. No live DNS records are required for the default demo.
 
@@ -80,7 +163,7 @@ npm run resolve -- nils.posemesh
 npm run resolve -- americaNorth.posemesh
 ```
 
-The default CLI mode uses mock records from `src/demo.ts`.
+The default CLI mode uses mock records from [`src/demo.ts`](src/demo.ts).
 
 To try live DNS resolution through a Handshake-aware resolver:
 
@@ -90,53 +173,27 @@ npm run resolve -- hq.posemesh --live --dns-server 127.0.0.1:5350
 
 That DNS server could be backed by software such as hsd or hnsd, depending on the operator's setup.
 
-## Project Layout
+## Project layout
 
-- `src/types.ts` defines the discovery and manifest types.
-- `src/name.ts` validates `.posemesh` names.
-- `src/parser.ts` parses compact Posemesh TXT records and `agent-identity:v1` records.
-- `src/resolvers.ts` contains the resolver interface, `MockResolver`, and `DnsResolver`.
-- `src/manifest.ts` fetches and validates manifest JSON.
-- `src/discover.ts` contains `discoverPosemesh(name, options)`.
-- `src/cli.ts` powers `npm run resolve` and `npm run demo`.
-- `test/` contains Node test runner coverage.
-- `examples/` contains small demo and live-DNS examples.
+- [`src/types.ts`](src/types.ts) defines the discovery and manifest types.
+- [`src/name.ts`](src/name.ts) validates `.posemesh` names for the current prototype.
+- [`src/parser.ts`](src/parser.ts) parses compact Posemesh TXT records and `agent-identity:v1` records.
+- [`src/resolvers.ts`](src/resolvers.ts) contains the resolver interface, `MockResolver`, and `DnsResolver`.
+- [`src/manifest.ts`](src/manifest.ts) fetches and validates manifest JSON, including Auki-shaped node categories.
+- [`src/discover.ts`](src/discover.ts) contains `discoverPosemesh(name, options)`.
+- [`src/cli.ts`](src/cli.ts) powers `npm run resolve` and `npm run demo`.
+- [`test/`](test) contains Node test runner coverage.
+- [`examples/`](examples) contains small demo and live-DNS examples.
 
-## What This Prototype Proves
-
-This repository shows that a `.posemesh` name can be treated as a discovery pointer:
-
-1. Resolve the name's TXT records.
-2. Parse a compact discovery or agent identity record.
-3. Fetch a manifest if the record points to one.
-4. Normalize the result into one predictable object.
-
-That is enough to demonstrate a possible decentralized discovery flow without modifying the Posemesh SDK and without forking Handshake resolver software.
-
-## What Auki Would Need To Productionize
-
-A production version would need decisions and engineering beyond this prototype:
-
-- a real metadata specification and versioning policy
-- live `.posemesh` records controlled by the appropriate operators
-- manifest signature verification
-- key rotation and revocation rules
-- resolver availability and caching strategy
-- security review for endpoint trust, replay behavior, and downgrade behavior
-- compatibility tests against actual Posemesh services
-- official ownership, maintenance, and documentation
-
-## Prototype-Only Notes
-
-- Manifest signature verification is marked as TODO.
-- Demo URLs use `example.com` and mock data.
-- The CLI defaults to mock mode so anyone can run it before live records exist.
-- This project is intentionally separate from Posemesh and Handshake reference implementations.
-- This repository does not claim endorsement by Auki Labs or the Handshake project.
-
-## Reviewed Reference Projects
+## Reviewed reference projects
 
 - [Posemesh](https://github.com/aukilabs/posemesh)
+- [Domain Server](https://github.com/aukilabs/domain-server)
+- [Relay / Hagall](https://github.com/aukilabs/hagall)
+- [Reconstruction Server](https://github.com/aukilabs/reconstruction-server)
+- [Splatter Server](https://github.com/aukilabs/splatter-server)
+- [VLM Node](https://github.com/aukilabs/vlm-node)
+- [Pathfinding](https://github.com/aukilabs/pathfinding)
 - [hsd](https://github.com/handshake-org/hsd)
 - [hnsd](https://github.com/handshake-org/hnsd)
 - [hs-client](https://github.com/handshake-org/hs-client)

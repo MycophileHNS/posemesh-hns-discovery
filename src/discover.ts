@@ -6,6 +6,7 @@ import type {
   DiscoverPosemeshOptions,
   NormalizedDiscoveryResult,
   PosemeshManifest,
+  PosemeshServiceEndpoint,
 } from "./types.ts";
 
 export async function discoverPosemesh(
@@ -47,28 +48,51 @@ interface NormalizeInput {
 function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryResult {
   const txtCapabilities = input.records.flatMap((record) => record.capabilities);
   const txtPublicKeys = input.records.flatMap((record) => record.publicKeys);
+  const serviceEndpoints = collectServiceEndpoints(input.manifest);
 
   return {
     name: input.name,
     sourceName: input.manifest?.sourceName ?? input.manifest?.name ?? input.name,
+    regions: input.manifest?.regions ?? [],
     domainManagers: input.manifest?.domainManagers ?? [],
     relays: input.manifest?.relays ?? [],
+    reconstructionNodes: input.manifest?.reconstructionNodes ?? [],
+    splatterNodes: input.manifest?.splatterNodes ?? [],
+    vlmNodes: input.manifest?.vlmNodes ?? [],
+    pathfindingServices: input.manifest?.pathfindingServices ?? [],
     bootstrapNodes: input.manifest?.bootstrapNodes ?? [],
+    wallets: input.manifest?.wallets ?? [],
     publicKeys: uniqueStrings([
       ...txtPublicKeys,
       ...(input.manifest?.publicKeys ?? []),
-      ...(input.manifest?.domainManagers ?? []).flatMap((manager) => manager.publicKey ?? []),
-      ...(input.manifest?.relays ?? []).flatMap((relay) => relay.publicKey ?? []),
-      ...(input.manifest?.bootstrapNodes ?? []).flatMap((node) => node.publicKey ?? []),
+      ...(input.manifest?.wallets ?? []).flatMap((wallet) => wallet.publicKey ?? []),
+      ...serviceEndpoints.flatMap((endpoint) => endpoint.publicKey ?? []),
     ]),
     capabilities: uniqueStrings([
       ...txtCapabilities,
       ...(input.manifest?.capabilities ?? []),
-      ...(input.manifest?.domainManagers ?? []).flatMap((manager) => manager.capabilities ?? []),
+      ...serviceEndpoints.flatMap((endpoint) => endpoint.capabilities ?? []),
     ]),
+    ...(input.manifest?.healthCheck ? { healthCheck: input.manifest.healthCheck } : {}),
     ...(input.manifestUrl ? { manifestUrl: input.manifestUrl } : {}),
     resolvedAt: input.resolvedAt,
   };
+}
+
+function collectServiceEndpoints(manifest: PosemeshManifest | undefined): PosemeshServiceEndpoint[] {
+  if (!manifest) {
+    return [];
+  }
+
+  return [
+    ...(manifest.domainManagers ?? []),
+    ...(manifest.relays ?? []),
+    ...(manifest.reconstructionNodes ?? []),
+    ...(manifest.splatterNodes ?? []),
+    ...(manifest.vlmNodes ?? []),
+    ...(manifest.pathfindingServices ?? []),
+    ...(manifest.bootstrapNodes ?? []),
+  ];
 }
 
 function uniqueStrings(values: string[]): string[] {
