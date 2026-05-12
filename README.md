@@ -6,9 +6,15 @@ This is not official Auki software. It is not endorsed by Auki Labs. It is not a
 
 ## Five-minute summary
 
-Posemesh is decentralized physical-world infrastructure. It includes domain servers, relays, reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, bootstrap nodes, wallets, and public keys.
+Posemesh is decentralized physical-world infrastructure. To use it, software needs to find the right services: domain managers, relays, reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, bootstrap nodes, wallets, and public keys.
 
-Software that wants to use Posemesh needs a way to answer simple questions:
+In plain language, this prototype asks:
+
+> Could a stable Handshake name like `hq.posemesh` or `relays.posemesh` help Posemesh clients find the right infrastructure, even when servers, keys, or regions change?
+
+The answer demonstrated here is yes, at prototype level.
+
+A Posemesh client, robot, SDK, or agent may need to answer questions like:
 
 - Where are the relays?
 - Which domain managers are available?
@@ -17,35 +23,41 @@ Software that wants to use Posemesh needs a way to answer simple questions:
 - Which public keys identify the operator?
 - Which endpoint should a robot, SDK, or agent call first?
 
-Today, answers like that can come from a console, a central API, a config file, or documentation. Those are useful, but they can also become single points of discovery.
+Today, answers like that can come from a console, a central API, a config file, or documentation. Those are useful, but they can also become single points of discovery. If the directory moves, an API changes, or a region is reorganized, clients need another way to find the next correct endpoint.
 
-This prototype explores another option: publish a small machine-readable discovery record in Handshake DNS TXT records. That TXT record can point to a JSON manifest. The manifest lists Posemesh service endpoints, capabilities, wallets, keys, regions, and health checks.
+This prototype explores another option: publish a small machine-readable discovery record in Handshake DNS TXT records. The TXT record can point to a JSON manifest. The manifest lists Posemesh service endpoints, capabilities, wallets, keys, regions, and health checks.
 
-The result is a stable name that can keep working even when the infrastructure behind it moves.
+The result is a stable name that can keep working even when the infrastructure behind it moves. This does not replace Posemesh APIs, the Posemesh Console, or Auki-controlled infrastructure. It gives them a resilient discovery layer.
 
 Live lookups require a Handshake-aware DNS resolver or resolver API. The default demo uses mock records so reviewers can understand the flow without setting up Handshake infrastructure.
 
-## Why Handshake + .posemesh matters for Posemesh
+## Why Handshake + .posemesh matters
 
 The proposed integration should stay focused on `.posemesh`. The intent is that `.posemesh` can become a resilient discovery root for Posemesh infrastructure if Auki chooses to accept and operate it.
 
-The important idea is not “make a website resolve in a browser.” These names are headless. Agents, CLIs, SDKs, robots, and services can resolve them through DNS, resolver APIs, or Handshake-aware infrastructure.
+Handshake matters here because it can provide an owner-controlled name that is not tied to one cloud account, one API host, or one documentation page. The name can stay stable while the records behind it point to current infrastructure.
+
+The important idea is not "make a website resolve in a browser." These names are headless. Agents, CLIs, SDKs, robots, and services can resolve them through DNS, resolver APIs, or Handshake-aware infrastructure.
 
 The useful idea is:
 
 > A Handshake name can act as an owner-controlled discovery and identity anchor for Auki-operated and community-operated Posemesh infrastructure.
 
-These are hypothetical examples only. This repository does not control `.posemesh`, does not claim Auki has accepted or deployed it, and does not publish official Auki records. If `.posemesh` were gifted to and accepted by Auki, it could publish discovery records such as:
+Handshake helps because the name can remain stable while endpoints, regions, keys, and service operators change. That makes Posemesh more resilient to API moves, cloud migrations, service reorganization, and future community-operated infrastructure.
 
-- `hq.posemesh`: canonical Posemesh discovery manifest
-- `relays.posemesh`: Relay/Hagall discovery
-- `domains.posemesh`: domain manager discovery
-- `americaNorth.posemesh`: regional services and bootstrap nodes
-- `compute.posemesh`: reconstruction, splatter, VLM, and pathfinding services
+For the Auki team, the strongest reason to consider this is resilience: clients can start from a durable name, verify the metadata they receive, and then connect to the current Posemesh services. That creates a path toward decentralized discovery without forcing a production SDK fork.
+
+## Example .posemesh names
+
+These examples are hypothetical. This repository does not control `.posemesh`, does not claim Auki has accepted or deployed it, and does not publish official Auki records.
+
+- `nils.posemesh` could identify a person, operator, or trusted node group.
+- `hq.posemesh` could identify Auki or Posemesh headquarters infrastructure.
+- `americaNorth.posemesh` could identify regional infrastructure.
+- `relays.posemesh` could publish relay discovery.
+- `domains.posemesh` could publish domain manager discovery.
 
 This repository demos `.posemesh` names such as `hq.posemesh`, `relays.posemesh`, and `americaNorth.posemesh`.
-
-Handshake helps because the name can remain stable while endpoints, regions, keys, and service operators change. That makes Posemesh more resilient to API moves, cloud migrations, service reorganization, and future community-operated infrastructure.
 
 ## What this prototype does
 
@@ -81,7 +93,7 @@ The normalized result can include:
 
 ## What this prototype proves
 
-This prototype proves the basic discovery flow:
+This prototype proves the basic discovery flow in a small, reviewable repo:
 
 1. A stable Handshake name can point to Posemesh discovery metadata.
 2. The metadata can be small enough to fit in TXT records.
@@ -89,7 +101,7 @@ This prototype proves the basic discovery flow:
 4. The manifest can describe Posemesh service categories drawn from public Auki repositories.
 5. A client can normalize all of that into one predictable object.
 
-It also proves that this can be done as a separate layer. The prototype does not modify Posemesh, hsd, hnsd, or any Auki repository.
+It also proves that this can be done as a separate layer. The prototype does not modify Posemesh, hsd, hnsd, or any Auki repository. That is important for review: the idea can be evaluated without treating this repo as an Auki SDK fork.
 
 The practical value is resilience. A Posemesh client could discover where to go next from a name instead of depending only on a central service directory.
 
@@ -97,7 +109,7 @@ For a longer Auki-facing argument, see [`docs/auki-resilience-case.md`](docs/auk
 
 ## What Auki would need to productionize
 
-A production version would need Auki-owned decisions and engineering work beyond this prototype:
+A production version would need Auki-owned decisions and engineering work beyond this prototype. The important next steps would be:
 
 - decide whether to accept and operate `.posemesh` as an official namespace
 - define a stable metadata specification and versioning policy
