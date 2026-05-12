@@ -1,9 +1,12 @@
-import { fetchPosemeshManifest } from "./manifest.ts";
+import { fetchPosemeshManifestWithVerification } from "./manifest.ts";
 import { assertValidPosemeshName, normalizeName } from "./name.ts";
 import { parseTxtRecords } from "./parser.ts";
 import { DnsResolver } from "./resolvers.ts";
 import type {
   DiscoverPosemeshOptions,
+  FetchPosemeshManifestOptions,
+  ManifestVerificationKey,
+  ManifestVerificationResult,
   NormalizedDiscoveryResult,
   PosemeshManifest,
   PosemeshServiceEndpoint,
@@ -21,19 +24,35 @@ export async function discoverPosemesh(
   const warnings = [...parsedTxt.warnings];
   appendDiscoveryRecordWarning(normalizedName, txtRecords, parsedTxt.records, warnings);
   const manifestUrl = selectManifestUrl(parsedTxt.records, warnings);
+  const manifestFetchOptions = createManifestFetchOptions(
+    normalizedName,
+    manifestUrl,
+    parsedTxt.records,
+    options.manifestFetchOptions,
+  );
   let manifest: PosemeshManifest | undefined;
+  let manifestVerification: ManifestVerificationResult | undefined;
 
   if (manifestUrl && shouldFetchManifest) {
     try {
-      manifest = await (options.manifestFetcher ?? fetchPosemeshManifest)(
-        manifestUrl,
-        options.manifestFetchOptions,
-      );
+      if (options.manifestFetcher) {
+        manifest = await options.manifestFetcher(manifestUrl, manifestFetchOptions);
+      } else {
+        const fetched = await fetchPosemeshManifestWithVerification(
+          manifestUrl,
+          manifestFetchOptions,
+        );
+        manifest = fetched.manifest;
+        manifestVerification = fetched.verification;
+        warnings.push(...(fetched.warnings ?? []));
+      }
+
       const identityWarning = validateManifestIdentity(normalizedName, manifest, manifestUrl);
 
       if (identityWarning) {
         warnings.push(identityWarning);
         manifest = undefined;
+        manifestVerification = undefined;
       }
     } catch (error) {
       warnings.push({
@@ -51,6 +70,7 @@ export async function discoverPosemesh(
     resolvedAt: (options.now ?? (() => new Date()))().toISOString(),
     ...(manifest ? { manifest } : {}),
     ...(manifestUrl ? { manifestUrl } : {}),
+    ...(manifestVerification ? { manifestVerification } : {}),
   });
 }
 
@@ -60,6 +80,7 @@ interface NormalizeInput {
   warnings: ReturnType<typeof parseTxtRecords>["warnings"];
   manifest?: PosemeshManifest;
   manifestUrl?: string;
+  manifestVerification?: ManifestVerificationResult;
   resolvedAt: string;
 }
 
@@ -94,10 +115,50 @@ function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryRes
     ]),
     ...(input.manifest?.healthCheck ? { healthCheck: input.manifest.healthCheck } : {}),
     ...(input.manifestUrl ? { manifestUrl: input.manifestUrl } : {}),
+    ...(input.manifestVerification ? { manifestVerification: input.manifestVerification } : {}),
     agentEndpoints: uniqueStrings(agentEndpoints),
     resolvedAt: input.resolvedAt,
     warnings: input.warnings,
   };
+}
+
+function createManifestFetchOptions(
+  name: string,
+  manifestUrl: string | undefined,
+  records: ReturnType<typeof parseTxtRecords>["records"],
+  options: FetchPosemeshManifestOptions | undefined,
+): FetchPosemeshManifestOptions {
+  const anchoredKeys = collectManifestVerificationKeys(records);
+  const trustedKeys = uniqueVerificationKeys([...(options?.trustedKeys ?? []), ...anchoredKeys]);
+
+  return {
+    ...(options ?? {}),
+    trustedKeys,
+    expectedName: options?.expectedName ?? name,
+    ...(manifestUrl ? { expectedManifestUrl: options?.expectedManifestUrl ?? manifestUrl } : {}),
+  };
+}
+
+function collectManifestVerificationKeys(
+  records: ReturnType<typeof parseTxtRecords>["records"],
+): ManifestVerificationKey[] {
+  return records.flatMap((record) => record.verificationKeys);
+}
+
+function uniqueVerificationKeys(keys: ManifestVerificationKey[]): ManifestVerificationKey[] {
+  const seen = new Set<string>();
+
+  return keys.filter((key) => {
+    const id = key.id ?? "";
+    const cacheKey = `${key.source}:${key.algorithm}:${id}:${key.publicKey}`;
+
+    if (seen.has(cacheKey)) {
+      return false;
+    }
+
+    seen.add(cacheKey);
+    return true;
+  });
 }
 
 function appendDiscoveryRecordWarning(

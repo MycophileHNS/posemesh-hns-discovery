@@ -2,6 +2,8 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 import type { RequestOptions } from "node:https";
 
 export type DiscoveryRecordKind = "posemesh" | "agent-identity";
+export type ManifestSecurityMode = "strict" | "permissive" | "demo";
+export type ManifestSignatureAlgorithm = "ed25519" | "ecdsa-p256-sha256";
 
 export interface PosemeshServiceEndpoint {
   id?: string;
@@ -45,6 +47,9 @@ export interface PosemeshManifest {
   version: 1;
   name?: string;
   sourceName?: string;
+  manifestUrl?: string;
+  issuedAt?: string;
+  expiresAt?: string;
   regions?: string[];
   domainManagers?: DomainManager[];
   relays?: Relay[];
@@ -67,7 +72,33 @@ export interface PosemeshDiscoveryRecord {
   manifestUrl?: string;
   agentEndpointUrl?: string;
   publicKeys: string[];
+  verificationKeys: ManifestVerificationKey[];
   capabilities: string[];
+}
+
+export interface ManifestVerificationKey {
+  id?: string;
+  algorithm: ManifestSignatureAlgorithm;
+  publicKey: string;
+  source: "txt" | "trusted";
+}
+
+export interface SignedPosemeshManifestEnvelope {
+  version: 1;
+  payload: string;
+  signature: string;
+  algorithm: ManifestSignatureAlgorithm;
+  keyId?: string;
+}
+
+export interface ManifestVerificationResult {
+  status: "verified" | "unsigned-allowed" | "invalid-allowed";
+  algorithm?: ManifestSignatureAlgorithm;
+  keyId?: string;
+  keySource?: ManifestVerificationKey["source"];
+  verifiedAt: string;
+  issuedAt?: string;
+  expiresAt?: string;
 }
 
 export interface NormalizedDiscoveryResult {
@@ -86,6 +117,7 @@ export interface NormalizedDiscoveryResult {
   capabilities: string[];
   healthCheck?: string;
   manifestUrl?: string;
+  manifestVerification?: ManifestVerificationResult;
   agentEndpoints: string[];
   resolvedAt: string;
   warnings: ParseWarning[];
@@ -123,6 +155,19 @@ export interface FetchPosemeshManifestOptions {
   maxBytes?: number;
   resolveHostname?: ManifestHostResolver;
   httpsRequest?: ManifestHttpsRequest;
+  securityMode?: ManifestSecurityMode;
+  trustedKeys?: ManifestVerificationKey[];
+  expectedName?: string;
+  expectedManifestUrl?: string;
+  now?: () => Date;
+  maxClockSkewMs?: number;
+  maxManifestTtlMs?: number;
+}
+
+export interface FetchedPosemeshManifest {
+  manifest: PosemeshManifest;
+  verification: ManifestVerificationResult;
+  warnings?: ParseWarning[];
 }
 
 export type ManifestFetcher = (

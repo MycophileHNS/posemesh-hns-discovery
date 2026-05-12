@@ -67,6 +67,7 @@ The prototype:
 - parses compact `posemesh:v1` TXT records
 - parses `agent-identity:v1` TXT records
 - fetches a remote manifest JSON when a TXT record points to one
+- requires signed manifest envelopes for built-in live manifest fetching
 - validates a small Posemesh-oriented manifest shape
 - returns one normalized discovery result
 - reports TXT parse warnings instead of silently hiding malformed records
@@ -152,6 +153,9 @@ The manifest schema is intentionally small. It uses service category names obser
 {
   "version": 1,
   "sourceName": "americaNorth.posemesh",
+  "manifestUrl": "https://example.com/posemesh/america-north.json",
+  "issuedAt": "2026-05-12T00:00:00.000Z",
+  "expiresAt": "2026-05-13T00:00:00.000Z",
   "regions": ["north-america"],
   "domainManagers": [],
   "relays": [],
@@ -163,12 +167,25 @@ The manifest schema is intentionally small. It uses service category names obser
   "wallets": [],
   "publicKeys": [],
   "capabilities": [],
-  "healthCheck": "https://example.com/health",
-  "signature": "TODO"
+  "healthCheck": "https://example.com/health"
 }
 ```
 
-Signature verification is intentionally marked as prototype-only work. Production clients should not trust remote manifests without a clear signing and verification policy.
+Built-in live manifest fetching now defaults to strict signed-envelope verification. The signing key must be anchored in TXT metadata for the requested `.posemesh` name or supplied explicitly as a trusted key. Demo mode still uses local mock manifests so the project remains easy to review without live infrastructure.
+
+Signed envelopes carry the manifest JSON as a base64url payload and sign the exact payload bytes with a Posemesh-specific signing context:
+
+```json
+{
+  "version": 1,
+  "payload": "BASE64URL_MANIFEST_JSON",
+  "signature": "BASE64URL_SIGNATURE",
+  "algorithm": "ed25519",
+  "keyId": "operator-key-1"
+}
+```
+
+Production clients still need Auki-owned signing policy, key rotation rules, and operational security review before trusting this format for deployed infrastructure.
 
 For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, checks hostnames for localhost/private/reserved addresses, pins the checked address for the request, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model; production clients should use stronger network isolation and signed manifests because DNS answers can change over time.
 

@@ -1,5 +1,11 @@
 import { parsePublicKey } from "./public-keys.ts";
-import type { ParsedTxtRecords, PosemeshDiscoveryRecord } from "./types.ts";
+import { parseManifestSignatureAlgorithm } from "./security.ts";
+import type {
+  ManifestSignatureAlgorithm,
+  ManifestVerificationKey,
+  ParsedTxtRecords,
+  PosemeshDiscoveryRecord,
+} from "./types.ts";
 
 const POSEMESH_PREFIX = "posemesh:v1";
 const AGENT_IDENTITY_PREFIX = "agent-identity:v1=";
@@ -73,13 +79,17 @@ export function parsePosemeshTxt(record: string): PosemeshDiscoveryRecord {
 
   const manifestUrl = values.get("manifest");
   const publicKey = values.get("publicKey");
+  const keyId = values.get("keyId");
+  const algorithm = parseOptionalAlgorithm(values.get("alg"));
   const capabilities = splitCsv(values.get("capabilities"));
+  const publicKeys = publicKey ? [parsePublicKey(publicKey, "TXT field publicKey")] : [];
 
   const result: PosemeshDiscoveryRecord = {
     kind: "posemesh",
     version: 1,
     raw: record,
-    publicKeys: publicKey ? [parsePublicKey(publicKey, "TXT field publicKey")] : [],
+    publicKeys,
+    verificationKeys: createVerificationKeys(publicKeys, algorithm, keyId),
     capabilities,
   };
 
@@ -111,12 +121,34 @@ export function parseAgentIdentityTxt(record: string): PosemeshDiscoveryRecord {
     version: 1,
     raw: record,
     publicKeys,
+    verificationKeys: [],
     capabilities,
   };
 
   result.agentEndpointUrl = parseHttpsUrl(endpoint, "endpoint");
 
   return result;
+}
+
+function createVerificationKeys(
+  publicKeys: string[],
+  algorithm: ManifestSignatureAlgorithm,
+  keyId: string | undefined,
+): ManifestVerificationKey[] {
+  return publicKeys.map((publicKey) => ({
+    ...(keyId ? { id: keyId } : {}),
+    algorithm,
+    publicKey,
+    source: "txt",
+  }));
+}
+
+function parseOptionalAlgorithm(value: string | undefined): ManifestSignatureAlgorithm {
+  if (!value) {
+    return "ed25519";
+  }
+
+  return parseManifestSignatureAlgorithm(value, "TXT field alg");
 }
 
 function splitCsv(value: string | undefined): string[] {

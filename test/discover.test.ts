@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import type { ClientRequest, IncomingMessage } from "node:http";
+import type { RequestOptions } from "node:https";
+import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { discoverPosemesh } from "../src/discover.ts";
 import { MockResolver } from "../src/resolvers.ts";
@@ -180,7 +184,46 @@ describe("discoverPosemesh", () => {
       now: () => fixedNow,
     });
 
-    assert.deepEqual(receivedOptions, manifestFetchOptions);
+    assert.deepEqual(receivedOptions, {
+      ...manifestFetchOptions,
+      trustedKeys: [],
+      expectedName: "hq.posemesh",
+      expectedManifestUrl: "https://example.com/hq.json",
+    });
+  });
+
+  it("anchors manifest verification keys from posemesh TXT records", async () => {
+    const txtPublicKey = Buffer.alloc(32, 1).toString("base64");
+    let receivedOptions: unknown;
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": [
+          `posemesh:v1; manifest=https://example.com/hq.json; alg=ed25519; keyId=hq-key; publicKey=${txtPublicKey}`,
+        ],
+      }),
+      manifestFetcher: async (_url, options) => {
+        receivedOptions = options;
+        return {
+          version: 1,
+          sourceName: "hq.posemesh",
+        };
+      },
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(receivedOptions, {
+      trustedKeys: [
+        {
+          id: "hq-key",
+          algorithm: "ed25519",
+          publicKey: txtPublicKey,
+          source: "txt",
+        },
+      ],
+      expectedName: "hq.posemesh",
+      expectedManifestUrl: "https://example.com/hq.json",
+    });
   });
 
   it("surfaces TXT parse warnings in the normalized result", async () => {
@@ -219,6 +262,29 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.source, "manifest");
     assert.equal(result.warnings[0]?.url, "https://example.com/missing.json");
+  });
+
+  it("surfaces demo-mode unsigned manifest warnings in normalized discovery", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; manifest=https://manifest.example.test/posemesh.json"],
+      }),
+      manifestFetchOptions: {
+        securityMode: "demo",
+        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+        httpsRequest: createManifestHttpsRequest(
+          JSON.stringify({
+            version: 1,
+            sourceName: "hq.posemesh",
+          }),
+        ),
+      },
+      now: () => fixedNow,
+    });
+
+    assert.equal(result.sourceName, "hq.posemesh");
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0]?.message ?? "", /demo mode accepted an unsigned manifest/);
   });
 
   it("warns when no TXT records are found", async () => {
@@ -335,3 +401,32 @@ describe("discoverPosemesh", () => {
     assert.match(result.warnings[0]?.message ?? "", /Manifest name/);
   });
 });
+
+function createManifestHttpsRequest(body: string) {
+  return ((_: RequestOptions, callback?: (response: IncomingMessage) => void) => {
+    const req = new EventEmitter() as ClientRequest;
+
+    (req as ClientRequest & { setTimeout: ClientRequest["setTimeout"] }).setTimeout = () => req;
+    (req as ClientRequest & { destroy: ClientRequest["destroy"] }).destroy = (error?: Error) => {
+      if (error) {
+        req.emit("error", error);
+      }
+
+      return req;
+    };
+    (req as ClientRequest & { end: ClientRequest["end"] }).end = () => {
+      const response = new PassThrough() as PassThrough & Partial<IncomingMessage>;
+      response.statusCode = 200;
+      response.headers = {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(body)),
+      };
+
+      callback?.(response as IncomingMessage);
+      response.end(body);
+      return req;
+    };
+
+    return req;
+  }) as NonNullable<import("../src/types.ts").FetchPosemeshManifestOptions["httpsRequest"]>;
+}

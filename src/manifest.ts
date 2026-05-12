@@ -2,14 +2,20 @@ import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { TextDecoder } from "node:util";
+import { normalizeName } from "./name.ts";
 import { parsePublicKey } from "./public-keys.ts";
+import { verifySignedManifestEnvelopeText } from "./security.ts";
 import type {
   BootstrapNode,
   DomainManager,
   FetchPosemeshManifestOptions,
+  FetchedPosemeshManifest,
   ManifestHostResolver,
   ManifestHttpsRequest,
   ManifestResolvedAddress,
+  ManifestSecurityMode,
+  ManifestVerificationResult,
+  ParseWarning,
   PathfindingService,
   PosemeshManifest,
   PosemeshServiceEndpoint,
@@ -22,6 +28,9 @@ import type {
 
 const DEFAULT_MANIFEST_TIMEOUT_MS = 5_000;
 const DEFAULT_MANIFEST_MAX_BYTES = 128 * 1024;
+const DEFAULT_MANIFEST_SECURITY_MODE: ManifestSecurityMode = "strict";
+const DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const DEFAULT_MANIFEST_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 
 const defaultManifestHostResolver: ManifestHostResolver = async (hostname) => {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
@@ -35,6 +44,18 @@ export async function fetchPosemeshManifest(
   url: string,
   options: FetchPosemeshManifestOptions = {},
 ): Promise<PosemeshManifest> {
+  const fetched = await fetchPosemeshManifestWithVerification(url, options);
+  return fetched.manifest;
+}
+
+/**
+ * Fetch a Posemesh manifest over HTTPS, reject unsafe manifest hosts, and return
+ * both the parsed manifest and its verification status. Strict mode is the default.
+ */
+export async function fetchPosemeshManifestWithVerification(
+  url: string,
+  options: FetchPosemeshManifestOptions = {},
+): Promise<FetchedPosemeshManifest> {
   const manifestUrl = await assertSafeManifestUrl(
     url,
     options.resolveHostname ?? defaultManifestHostResolver,
@@ -43,13 +64,12 @@ export async function fetchPosemeshManifest(
   const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
   const text = await fetchManifestText(
     manifestUrl.url,
-    manifestUrl.address,
+    manifestUrl.addresses,
     options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
     maxBytes,
     options.httpsRequest ?? (request as ManifestHttpsRequest),
   );
-  const json = JSON.parse(text) as unknown;
-  return parsePosemeshManifest(json);
+  return parseFetchedManifestText(text, url, options);
 }
 
 export function parsePosemeshManifest(value: unknown): PosemeshManifest {
@@ -65,6 +85,9 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     version: 1,
     ...optionalStringField(value, "name"),
     ...optionalStringField(value, "sourceName"),
+    ...optionalUrlField(value, "manifestUrl", ["https:"]),
+    ...optionalStringField(value, "issuedAt"),
+    ...optionalStringField(value, "expiresAt"),
     regions: parseStringArray(value.regions),
     domainManagers: parseDomainManagers(value.domainManagers),
     relays: parseRelays(value.relays),
@@ -86,9 +109,225 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     ...optionalStringField(value, "signature"),
   };
 
-  // TODO: Prototype only. Production code should verify manifest signatures
-  // against keys anchored in Handshake TXT records or another trusted policy.
   return manifest;
+}
+
+/**
+ * Parse fetched manifest JSON and apply the requested security mode.
+ *
+ * - strict: require a valid signed envelope and a matching anchored key.
+ * - permissive: allow unsigned manifests, but reject signed manifests that fail verification.
+ * - demo: allow unsigned or invalid signed manifests and surface warnings for prototypes.
+ */
+export function parseFetchedManifestText(
+  text: string,
+  originalUrl: string,
+  options: FetchPosemeshManifestOptions,
+): FetchedPosemeshManifest {
+  // This is the security boundary for fetched manifests. Strict mode fails closed by default.
+  const mode = options.securityMode ?? DEFAULT_MANIFEST_SECURITY_MODE;
+  const now = (options.now ?? (() => new Date()))();
+  const parsed = JSON.parse(text) as unknown;
+
+  if (mode === "strict") {
+    return parseStrictFetchedManifest(text, originalUrl, options, now);
+  }
+
+  if (looksLikeSignedManifestEnvelope(parsed)) {
+    try {
+      return parseVerifiedFetchedManifest(text, originalUrl, options, now, true);
+    } catch (error) {
+      if (mode === "permissive") {
+        const message = error instanceof Error ? error.message : "Unknown signature error.";
+        throw new Error(`Permissive manifest verification failed for signed envelope: ${message}`);
+      }
+
+      return parseDemoInvalidSignedManifest(parsed, originalUrl, options, now, error);
+    }
+  }
+
+  const unsignedManifest = parsePosemeshManifest(parsed);
+  const verification = validateManifestSecurityClaims(
+    unsignedManifest,
+    {
+      status: "unsigned-allowed",
+      verifiedAt: now.toISOString(),
+    },
+    originalUrl,
+    options,
+    now,
+    false,
+  );
+  const warnings = [
+    createManifestWarning(
+      originalUrl,
+      `${mode} mode accepted an unsigned manifest. Strict mode requires a signed manifest envelope.`,
+    ),
+  ];
+
+  return { manifest: unsignedManifest, verification, warnings };
+}
+
+function parseStrictFetchedManifest(
+  text: string,
+  manifestUrl: string,
+  options: FetchPosemeshManifestOptions,
+  now: Date,
+): FetchedPosemeshManifest {
+  const trustedKeys = options.trustedKeys ?? [];
+
+  if (trustedKeys.length === 0) {
+    throw new Error("Strict manifest verification requires at least one anchored or trusted key.");
+  }
+
+  try {
+    return parseVerifiedFetchedManifest(text, manifestUrl, options, now, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown signature error.";
+    throw new Error(`Strict manifest verification failed: ${message}`, { cause: error });
+  }
+}
+
+function parseVerifiedFetchedManifest(
+  text: string,
+  manifestUrl: string,
+  options: FetchPosemeshManifestOptions,
+  now: Date,
+  requireSignedClaims: boolean,
+): FetchedPosemeshManifest {
+  // A signature is only meaningful when it verifies against a key anchored by TXT or caller config.
+  const trustedKeys = options.trustedKeys ?? [];
+
+  if (trustedKeys.length === 0) {
+    throw new Error("Manifest signature verification requires at least one anchored or trusted key.");
+  }
+
+  const verifiedEnvelope = verifySignedManifestEnvelopeText(text, trustedKeys, now);
+  const manifest = parsePosemeshManifest(JSON.parse(verifiedEnvelope.payloadText) as unknown);
+  const verification = validateManifestSecurityClaims(
+    manifest,
+    verifiedEnvelope.verification,
+    manifestUrl,
+    options,
+    now,
+    requireSignedClaims,
+  );
+
+  return { manifest, verification };
+}
+
+function parseDemoInvalidSignedManifest(
+  parsed: unknown,
+  manifestUrl: string,
+  options: FetchPosemeshManifestOptions,
+  now: Date,
+  verificationError: unknown,
+): FetchedPosemeshManifest {
+  const payloadText = decodeEnvelopePayloadText(parsed);
+  const manifest = parsePosemeshManifest(JSON.parse(payloadText) as unknown);
+  const envelopeMetadata = readEnvelopeMetadata(parsed);
+  const verification = validateManifestSecurityClaims(
+    manifest,
+    {
+      status: "invalid-allowed",
+      ...(envelopeMetadata.algorithm ? { algorithm: envelopeMetadata.algorithm } : {}),
+      ...(envelopeMetadata.keyId ? { keyId: envelopeMetadata.keyId } : {}),
+      verifiedAt: now.toISOString(),
+    },
+    manifestUrl,
+    options,
+    now,
+    false,
+  );
+  const message =
+    verificationError instanceof Error ? verificationError.message : "Unknown signature error.";
+
+  return {
+    manifest,
+    verification,
+    warnings: [
+      createManifestWarning(
+        manifestUrl,
+        `demo mode accepted a manifest with invalid signature verification: ${message}`,
+      ),
+    ],
+  };
+}
+
+function looksLikeSignedManifestEnvelope(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ("payload" in value || "signature" in value || "algorithm" in value || "keyId" in value)
+  );
+}
+
+function decodeEnvelopePayloadText(value: unknown): string {
+  if (!isRecord(value) || typeof value.payload !== "string" || !value.payload.trim()) {
+    throw new Error("Demo mode cannot read signed manifest payload.");
+  }
+
+  return decodeBase64Text(value.payload, "manifest envelope payload");
+}
+
+function readEnvelopeMetadata(value: unknown): {
+  algorithm?: ManifestVerificationResult["algorithm"];
+  keyId?: string;
+} {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return {
+    ...(value.algorithm === "ed25519" || value.algorithm === "ecdsa-p256-sha256"
+      ? { algorithm: value.algorithm }
+      : {}),
+    ...(typeof value.keyId === "string" && value.keyId.trim() ? { keyId: value.keyId.trim() } : {}),
+  };
+}
+
+function decodeBase64Text(value: string, field: string): string {
+  const trimmed = value.trim();
+
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed)) {
+    throw new Error(`${field} must be base64 or base64url.`);
+  }
+
+  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return Buffer.from(padded, "base64").toString("utf8");
+}
+
+function createManifestWarning(url: string, message: string): ParseWarning {
+  return {
+    source: "manifest",
+    url,
+    message,
+  };
+}
+
+function validateManifestSecurityClaims(
+  manifest: PosemeshManifest,
+  verification: ManifestVerificationResult,
+  manifestUrl: string,
+  options: FetchPosemeshManifestOptions,
+  now: Date,
+  requireSignedClaims: boolean,
+): ManifestVerificationResult {
+  validateExpectedName(manifest, options.expectedName);
+  validateExpectedManifestUrl(manifest, options.expectedManifestUrl ?? manifestUrl, requireSignedClaims);
+
+  const issuedAt = validateManifestTimestamp(manifest.issuedAt, "issuedAt", requireSignedClaims);
+  const expiresAt = validateManifestTimestamp(manifest.expiresAt, "expiresAt", requireSignedClaims);
+
+  if (issuedAt && expiresAt) {
+    validateManifestFreshness(issuedAt, expiresAt, now, options);
+  }
+
+  return {
+    ...verification,
+    ...(manifest.issuedAt ? { issuedAt: manifest.issuedAt } : {}),
+    ...(manifest.expiresAt ? { expiresAt: manifest.expiresAt } : {}),
+  };
 }
 
 function parseDomainManagers(value: unknown): DomainManager[] {
@@ -273,13 +512,106 @@ function optionalUrlField<T extends string>(
   } as Partial<Record<T, string>>;
 }
 
+function validateExpectedName(manifest: PosemeshManifest, expectedName: string | undefined): void {
+  if (!expectedName) {
+    return;
+  }
+
+  if (!manifest.sourceName) {
+    throw new Error(`Manifest sourceName is required and must match requested name ${expectedName}.`);
+  }
+
+  if (normalizeName(manifest.sourceName).toLowerCase() !== normalizeName(expectedName).toLowerCase()) {
+    throw new Error(
+      `Manifest sourceName ${manifest.sourceName} does not match requested name ${expectedName}.`,
+    );
+  }
+}
+
+function validateExpectedManifestUrl(
+  manifest: PosemeshManifest,
+  expectedManifestUrl: string | undefined,
+  requireManifestUrl: boolean,
+): void {
+  if (!expectedManifestUrl) {
+    return;
+  }
+
+  if (!manifest.manifestUrl) {
+    if (requireManifestUrl) {
+      throw new Error("Signed manifest payload must include manifestUrl.");
+    }
+
+    return;
+  }
+
+  if (normalizeUrlString(manifest.manifestUrl) !== normalizeUrlString(expectedManifestUrl)) {
+    throw new Error(
+      `Manifest manifestUrl ${manifest.manifestUrl} does not match requested URL ${expectedManifestUrl}.`,
+    );
+  }
+}
+
+function validateManifestTimestamp(
+  value: string | undefined,
+  field: "issuedAt" | "expiresAt",
+  required: boolean,
+): Date | undefined {
+  if (!value) {
+    if (required) {
+      throw new Error(`Signed manifest payload must include ${field}.`);
+    }
+
+    return undefined;
+  }
+
+  const parsed = new Date(value);
+
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw new Error(`Manifest ${field} must be a valid ISO-8601 UTC timestamp.`);
+  }
+
+  return parsed;
+}
+
+function validateManifestFreshness(
+  issuedAt: Date,
+  expiresAt: Date,
+  now: Date,
+  options: FetchPosemeshManifestOptions,
+): void {
+  const maxClockSkewMs = options.maxClockSkewMs ?? DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS;
+  const maxManifestTtlMs = options.maxManifestTtlMs ?? DEFAULT_MANIFEST_MAX_TTL_MS;
+  const ttlMs = expiresAt.getTime() - issuedAt.getTime();
+
+  if (ttlMs <= 0) {
+    throw new Error("Manifest expiresAt must be after issuedAt.");
+  }
+
+  if (ttlMs > maxManifestTtlMs) {
+    throw new Error(`Manifest validity window must not exceed ${maxManifestTtlMs}ms.`);
+  }
+
+  if (issuedAt.getTime() - maxClockSkewMs > now.getTime()) {
+    throw new Error("Manifest is not valid yet.");
+  }
+
+  if (expiresAt.getTime() + maxClockSkewMs < now.getTime()) {
+    throw new Error("Manifest has expired.");
+  }
+}
+
+function normalizeUrlString(value: string): string {
+  return new URL(value).toString();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 interface SafeManifestUrl {
   url: URL;
-  address: ManifestResolvedAddress;
+  addresses: ManifestResolvedAddress[];
 }
 
 async function assertSafeManifestUrl(
@@ -298,8 +630,8 @@ async function assertSafeManifestUrl(
     throw new Error("Manifest URL must use https.");
   }
 
-  const address = await assertPublicManifestHost(parsed.hostname, resolveHostname);
-  return { url: parsed, address };
+  const addresses = await assertPublicManifestHost(parsed.hostname, resolveHostname);
+  return { url: parsed, addresses };
 }
 
 function validateUrl(url: string, field: string, protocols: string[]): string {
@@ -325,7 +657,8 @@ function isAllowedProtocol(protocol: string, protocols: string[]): boolean {
 async function assertPublicManifestHost(
   hostname: string,
   resolveHostname: ManifestHostResolver,
-): Promise<ManifestResolvedAddress> {
+): Promise<ManifestResolvedAddress[]> {
+  // Resolve first, then reject the whole manifest URL if any returned address is unsafe.
   const host = normalizeHost(hostname);
 
   if (isLocalOrPrivateHost(host)) {
@@ -335,7 +668,7 @@ async function assertPublicManifestHost(
   const ipVersion = isIP(host);
 
   if (ipVersion) {
-    return { address: host, family: ipVersion === 6 ? 6 : 4 };
+    return [{ address: host, family: ipVersion === 6 ? 6 : 4 }];
   }
 
   let addresses: Awaited<ReturnType<ManifestHostResolver>>;
@@ -351,13 +684,27 @@ async function assertPublicManifestHost(
     throw new Error(`Manifest host lookup returned no addresses for ${host}.`);
   }
 
-  const blockedAddress = addresses.find(({ address }) => isLocalOrPrivateHost(address));
+  const normalizedAddresses = addresses.map(({ address }) => {
+    const normalizedAddress = normalizeHost(address);
+    const resolvedFamily = isIP(normalizedAddress);
+
+    if (!resolvedFamily) {
+      throw new Error(`Manifest host ${host} resolves to an invalid IP address.`);
+    }
+
+    return {
+      address: normalizedAddress,
+      family: resolvedFamily === 6 ? 6 : 4,
+    } satisfies ManifestResolvedAddress;
+  });
+
+  const blockedAddress = normalizedAddresses.find(({ address }) => isLocalOrPrivateHost(address));
 
   if (blockedAddress) {
     throw new Error(`Manifest host ${host} resolves to a localhost, private, or reserved network address.`);
   }
 
-  return addresses[0]!;
+  return normalizedAddresses;
 }
 
 function normalizeHost(hostname: string): string {
@@ -444,6 +791,40 @@ function parseIpv4MappedIpv6(host: string): string | undefined {
 
 function fetchManifestText(
   url: URL,
+  addresses: ManifestResolvedAddress[],
+  timeoutMs: number,
+  maxBytes: number,
+  httpsRequest: ManifestHttpsRequest,
+): Promise<string> {
+  return tryManifestAddresses(url, addresses, timeoutMs, maxBytes, httpsRequest);
+}
+
+async function tryManifestAddresses(
+  url: URL,
+  addresses: ManifestResolvedAddress[],
+  timeoutMs: number,
+  maxBytes: number,
+  httpsRequest: ManifestHttpsRequest,
+): Promise<string> {
+  // Try resolved addresses one at a time so a dead address does not fail the whole manifest.
+  const errors: string[] = [];
+
+  for (const address of addresses) {
+    try {
+      return await fetchManifestTextFromAddress(url, address, timeoutMs, maxBytes, httpsRequest);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown manifest fetch error.";
+      errors.push(`${address.address}: ${message}`);
+    }
+  }
+
+  throw new Error(
+    `Manifest fetch failed for ${url.toString()} using ${addresses.length} resolved address(es): ${errors.join("; ")}`,
+  );
+}
+
+function fetchManifestTextFromAddress(
+  url: URL,
   address: ManifestResolvedAddress,
   timeoutMs: number,
   maxBytes: number,
@@ -485,6 +866,19 @@ function fetchManifestText(
           return;
         }
 
+        const contentType = response.headers["content-type"];
+        const declaredContentType = Array.isArray(contentType) ? contentType[0] : contentType;
+
+        if (!isJsonContentType(declaredContentType)) {
+          response.resume();
+          reject(
+            new Error(
+              `Manifest response for ${url.toString()} must use Content-Type application/json.`,
+            ),
+          );
+          return;
+        }
+
         const contentLength = response.headers["content-length"];
         const declaredLength = Array.isArray(contentLength) ? contentLength[0] : contentLength;
 
@@ -520,4 +914,13 @@ function fetchManifestText(
     req.on("error", reject);
     req.end();
   });
+}
+
+function isJsonContentType(contentType: string | undefined): boolean {
+  if (!contentType) {
+    return false;
+  }
+
+  const [mediaType] = contentType.split(";", 1);
+  return mediaType?.trim().toLowerCase() === "application/json";
 }
