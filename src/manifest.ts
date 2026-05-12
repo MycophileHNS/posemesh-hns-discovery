@@ -404,10 +404,10 @@ function isPrivateIpv4(host: string): boolean {
 }
 
 function isPrivateIpv6(host: string): boolean {
-  const mappedIpv4 = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  const mappedIpv4 = parseIpv4MappedIpv6(host);
 
-  if (mappedIpv4?.[1]) {
-    return isPrivateIpv4(mappedIpv4[1]);
+  if (mappedIpv4) {
+    return isPrivateIpv4(mappedIpv4);
   }
 
   return (
@@ -421,6 +421,25 @@ function isPrivateIpv6(host: string): boolean {
     host.startsWith("feb") ||
     host.startsWith("2001:db8")
   );
+}
+
+function parseIpv4MappedIpv6(host: string): string | undefined {
+  const dotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+
+  if (dotted?.[1]) {
+    return dotted[1];
+  }
+
+  const hexadecimal = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+
+  if (!hexadecimal?.[1] || !hexadecimal[2]) {
+    return undefined;
+  }
+
+  const high = Number.parseInt(hexadecimal[1], 16);
+  const low = Number.parseInt(hexadecimal[2], 16);
+
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
 }
 
 function fetchManifestText(

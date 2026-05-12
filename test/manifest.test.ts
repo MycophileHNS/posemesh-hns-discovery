@@ -149,6 +149,23 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("rejects private IPv4 addresses encoded as IPv4-mapped IPv6 literals", async () => {
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://[::ffff:127.0.0.1]/posemesh.json"),
+      /localhost|private|reserved/,
+    );
+
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://[::ffff:7f00:1]/posemesh.json"),
+      /localhost|private|reserved/,
+    );
+
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://[::ffff:a00:1]/posemesh.json"),
+      /localhost|private|reserved/,
+    );
+  });
+
   it("fetches manifest JSON through the pinned HTTPS request path", async () => {
     const body = JSON.stringify({
       version: 1,
