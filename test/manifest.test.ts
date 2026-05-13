@@ -596,6 +596,28 @@ describe("Posemesh manifest parsing", () => {
     assert.match(fetched.warnings?.[0]?.message ?? "", /unsigned manifest/);
   });
 
+  it("does not treat plain manifests with legacy signature fields as signed envelopes", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const body = JSON.stringify({
+      version: 1,
+      sourceName: "hq.posemesh",
+      signature: "legacy-inline-signature",
+    });
+
+    for (const securityMode of ["permissive", "demo"] as const) {
+      const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+        httpsRequest: createManifestHttpsRequest(body),
+        securityMode,
+        expectedName: "hq.posemesh",
+      });
+
+      assert.equal(fetched.manifest.sourceName, "hq.posemesh");
+      assert.equal(fetched.manifest.signature, "legacy-inline-signature");
+      assert.equal(fetched.verification.status, "unsigned-allowed");
+    }
+  });
+
   it("returns cache metadata from manifest freshness policy", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({

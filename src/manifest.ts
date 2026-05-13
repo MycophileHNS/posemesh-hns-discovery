@@ -514,10 +514,7 @@ function createFetchedManifestResult(
 }
 
 function looksLikeSignedManifestEnvelope(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    ("payload" in value || "signature" in value || "algorithm" in value || "keyId" in value)
-  );
+  return isRecord(value) && ("payload" in value || "algorithm" in value);
 }
 
 function decodeEnvelopePayloadText(value: unknown): string {
