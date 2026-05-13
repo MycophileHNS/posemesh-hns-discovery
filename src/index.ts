@@ -18,9 +18,12 @@ export {
   parseTxtRecord,
   parseTxtRecords,
 } from "./parser.ts";
-export { DnsResolver, MockResolver } from "./resolvers.ts";
+export { CompositeResolver, DnsResolver, DohResolver, DotResolver, MockResolver } from "./resolvers.ts";
 export type {
   BootstrapNode,
+  CompositeResolverStrategy,
+  DetailedResolverAttempt,
+  DetailedResolverResult,
   DiscoverPosemeshOptions,
   DomainManager,
   FetchedPosemeshManifest,
@@ -48,8 +51,11 @@ export type {
   PosemeshServiceEndpoint,
   ReconstructionNode,
   Relay,
+  ResolverRecordType,
+  ResolverStatus,
   SignedPosemeshManifestEnvelope,
   SplatterNode,
+  TlsaResolver,
   TxtResolver,
   VlmNode,
   WalletReference,

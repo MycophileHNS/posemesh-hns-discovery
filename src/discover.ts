@@ -12,6 +12,7 @@ import type {
   NormalizedDiscoveryResult,
   PosemeshManifest,
   PosemeshServiceEndpoint,
+  TlsaResolver,
 } from "./types.ts";
 
 export async function discoverPosemesh(
@@ -31,6 +32,7 @@ export async function discoverPosemesh(
     manifestUrl,
     parsedTxt.records,
     options.manifestFetchOptions,
+    options.tlsaResolver,
   );
   let manifest: PosemeshManifest | undefined;
   let manifestVerification: ManifestVerificationResult | undefined;
@@ -141,16 +143,22 @@ function createManifestFetchOptions(
   manifestUrl: string | undefined,
   records: ReturnType<typeof parseTxtRecords>["records"],
   options: FetchPosemeshManifestOptions | undefined,
+  tlsaResolver: TlsaResolver | undefined,
 ): FetchPosemeshManifestOptions {
   const anchoredKeys = collectManifestVerificationKeys(records);
   const trustedKeys = uniqueVerificationKeys([...(options?.trustedKeys ?? []), ...anchoredKeys]);
-
-  return {
+  const fetchOptions: FetchPosemeshManifestOptions = {
     ...(options ?? {}),
     trustedKeys,
     expectedName: options?.expectedName ?? name,
     ...(manifestUrl ? { expectedManifestUrl: options?.expectedManifestUrl ?? manifestUrl } : {}),
   };
+
+  if (!fetchOptions.resolveTlsa && tlsaResolver) {
+    fetchOptions.resolveTlsa = tlsaResolver.resolveTlsa.bind(tlsaResolver);
+  }
+
+  return fetchOptions;
 }
 
 function collectManifestVerificationKeys(

@@ -176,6 +176,28 @@ export interface NormalizedDiscoveryResult {
 
 export interface TxtResolver {
   resolveTxt(name: string): Promise<string[]>;
+  resolveTxtDetailed?(name: string): Promise<DetailedResolverResult<string>>;
+}
+
+export type CompositeResolverStrategy = "first-success" | "quorum" | "strict-consensus";
+export type ResolverRecordType = "TXT" | "TLSA";
+export type ResolverStatus = "ok" | "no-records" | "lookup-error" | "consensus-failed";
+
+export interface DetailedResolverAttempt<TRecord> {
+  resolver: string;
+  status: Exclude<ResolverStatus, "consensus-failed">;
+  records: TRecord[];
+  error?: string;
+}
+
+export interface DetailedResolverResult<TRecord> {
+  name: string;
+  type: ResolverRecordType;
+  status: ResolverStatus;
+  records: TRecord[];
+  resolver?: string;
+  error?: string;
+  attempts?: DetailedResolverAttempt<TRecord>[];
 }
 
 export interface ParseWarning {
@@ -210,6 +232,14 @@ export type ManifestTlsaResolver = (
   hostname: string,
   port: number,
 ) => Promise<ManifestTlsaRecord[]>;
+
+export interface TlsaResolver {
+  resolveTlsa(hostname: string, port: number): Promise<ManifestTlsaRecord[]>;
+  resolveTlsaDetailed?(
+    hostname: string,
+    port: number,
+  ): Promise<DetailedResolverResult<ManifestTlsaRecord>>;
+}
 
 export interface FetchPosemeshManifestOptions {
   timeoutMs?: number;
@@ -263,6 +293,7 @@ export type ManifestFetcher = (
 
 export interface DiscoverPosemeshOptions {
   resolver?: TxtResolver;
+  tlsaResolver?: TlsaResolver;
   dnsServer?: string;
   fetchManifest?: boolean;
   manifestFetchOptions?: FetchPosemeshManifestOptions;
