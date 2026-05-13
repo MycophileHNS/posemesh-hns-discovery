@@ -121,6 +121,21 @@ Remaining production work:
 
 - Auki would need central logging policy, privacy review, and operational retention rules.
 
+### Packaging And Dependency Drift
+
+A prototype that looks small can still become risky if dependencies or package contents drift unnoticed.
+
+Current mitigations:
+
+- The runtime library has no third-party runtime dependencies.
+- Development dependencies are limited to TypeScript and Node.js type definitions.
+- CI runs typecheck, tests, build, `npm audit`, and `npm pack --dry-run`.
+- `package.json` uses an explicit package `files` allowlist.
+
+Remaining production work:
+
+- Auki would need release signing, provenance, dependency update policy, and a maintained vulnerability response process.
+
 ## Default Modes
 
 - `strict`: default for live manifest fetching. Requires valid signed manifests and anchored keys.
@@ -146,4 +161,5 @@ Reviewers should treat `demo` and `permissive` as prototype conveniences, not pr
 - Define key issuance, rotation, revocation, and emergency recovery.
 - Decide resolver strategy and DANE TLSA requirements.
 - Set production limits and cache policy from real deployment data.
+- Decide package provenance, release signing, and CI requirements.
 - Run external security review for SSRF, replay, downgrade, resolver disagreement, and operator impersonation.

@@ -4,6 +4,14 @@
   "description": "Proof-of-concept Handshake .posemesh discovery and identity resolver for Posemesh discussion.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MycophileHNS/posemesh-hns-discovery.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MycophileHNS/posemesh-hns-discovery/issues"
+  },
+  "homepage": "https://github.com/MycophileHNS/posemesh-hns-discovery#readme",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -17,7 +25,9 @@
   },
   "files": [
     "dist",
+    "docs",
     "README.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "engines": {
@@ -29,7 +39,9 @@
     "resolve": "node --experimental-transform-types src/cli.ts resolve",
     "demo": "node --experimental-transform-types src/cli.ts demo",
     "test": "node --test --experimental-transform-types test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "audit:security": "npm audit --audit-level=moderate",
+    "pack:dry-run": "npm pack --dry-run"
   },
   "keywords": [
     "posemesh",
