@@ -135,6 +135,39 @@ describe("CompositeResolver", () => {
 
     assert.deepEqual(await resolver.resolveTlsa("host.test", 443), [record]);
   });
+
+  it("treats TLSA RRsets as equal when resolvers return records in different order", async () => {
+    const firstRecord = {
+      certUsage: 3,
+      selector: 1,
+      matchingType: 1,
+      data: "abcd",
+    };
+    const secondRecord = {
+      certUsage: 3,
+      selector: 0,
+      matchingType: 1,
+      data: "ef01",
+    };
+    const resolver = new CompositeResolver(
+      [
+        new MockResolver(
+          {},
+          { name: "one", tlsaRecords: { "_443._tcp.host.test": [firstRecord, secondRecord] } },
+        ),
+        new MockResolver(
+          {},
+          { name: "two", tlsaRecords: { "_443._tcp.host.test": [secondRecord, firstRecord] } },
+        ),
+      ],
+      { strategy: "strict-consensus" },
+    );
+
+    const detailed = await resolver.resolveTlsaDetailed("host.test", 443);
+
+    assert.equal(detailed.status, "ok");
+    assert.deepEqual(detailed.records, [firstRecord, secondRecord]);
+  });
 });
 
 describe("DohResolver", () => {

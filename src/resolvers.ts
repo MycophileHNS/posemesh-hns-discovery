@@ -918,7 +918,11 @@ function createAttemptError<TRecord>(
 }
 
 function createRecordSetKey<TRecord>(records: TRecord[]): string {
-  return JSON.stringify(records.map(stableRecordValue).sort());
+  return JSON.stringify(records.map(canonicalizeRecord).sort());
+}
+
+function canonicalizeRecord(value: unknown): string {
+  return JSON.stringify(stableRecordValue(value));
 }
 
 function stableRecordValue(value: unknown): unknown {
