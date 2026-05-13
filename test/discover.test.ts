@@ -241,6 +241,7 @@ describe("discoverPosemesh", () => {
     assert.deepEqual(result.publicKeys, [TXT_KEY]);
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
   });
 
   it("keeps TXT-derived data when manifest fetching fails", async () => {
@@ -262,6 +263,7 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.source, "manifest");
     assert.equal(result.warnings[0]?.url, "https://example.com/missing.json");
+    assert.equal(result.warnings[0]?.code, "MANIFEST_FETCH_ERROR");
   });
 
   it("surfaces demo-mode unsigned manifest warnings in normalized discovery", async () => {
@@ -284,6 +286,7 @@ describe("discoverPosemesh", () => {
 
     assert.equal(result.sourceName, "hq.posemesh");
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_SIGNATURE_REQUIRED");
     assert.match(result.warnings[0]?.message ?? "", /demo mode accepted an unsigned manifest/);
   });
 
@@ -295,6 +298,7 @@ describe("discoverPosemesh", () => {
 
     assert.deepEqual(result.publicKeys, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "TXT_NO_RECORDS");
     assert.match(result.warnings[0]?.message ?? "", /No TXT records/);
   });
 
@@ -317,6 +321,7 @@ describe("discoverPosemesh", () => {
 
     assert.equal(fetchCalls, 0);
     assert.equal(result.manifestUrl, undefined);
+    assert.equal(result.warnings[0]?.code, "TXT_AMBIGUOUS_MANIFEST");
     assert.match(result.warnings[0]?.message ?? "", /Multiple distinct manifest URLs/);
   });
 
@@ -359,6 +364,7 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /does not match/);
   });
 
@@ -378,6 +384,7 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /sourceName is required/);
   });
 
@@ -398,7 +405,34 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /Manifest name/);
+  });
+
+  it("supports optional discovery logging without leaking raw TXT records", async () => {
+    const events: Array<{ message: string; fields?: unknown }> = [];
+    const logger = {
+      debug: (message: string, fields?: unknown) => events.push({ message, fields }),
+      info: (message: string, fields?: unknown) => events.push({ message, fields }),
+      warn: (message: string, fields?: unknown) => events.push({ message, fields }),
+      error: (message: string, fields?: unknown) => events.push({ message, fields }),
+    };
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; publicKey=not_a_hex_or_base64_key"],
+      }),
+      fetchManifest: false,
+      logger,
+      now: () => fixedNow,
+    });
+
+    assert.ok(events.some((event) => event.message === "Starting Posemesh discovery"));
+    assert.ok(events.some((event) => event.message === "TXT record parse warning"));
+    assert.equal(
+      events.some((event) => JSON.stringify(event.fields).includes("not_a_hex_or_base64_key")),
+      false,
+    );
   });
 });
 

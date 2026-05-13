@@ -4,13 +4,27 @@ import { request } from "node:https";
 import { isIP } from "node:net";
 import { TextDecoder } from "node:util";
 import { normalizeName } from "./name.ts";
+import {
+  createWarning,
+  discoveryError,
+  errorLogFields,
+  getErrorCode,
+  getErrorMessage,
+  logDebug,
+  logError,
+  logInfo,
+  logWarn,
+} from "./observability.ts";
 import { parsePublicKey } from "./public-keys.ts";
 import { verifySignedManifestEnvelopeText } from "./security.ts";
 import type {
   BootstrapNode,
+  DiscoveryErrorCode,
+  DiscoveryLogger,
   DomainManager,
   FetchPosemeshManifestOptions,
   FetchedPosemeshManifest,
+  LoggerRedactionOptions,
   ManifestCacheMetadata,
   ManifestDaneMetadata,
   ManifestHostResolver,
@@ -77,6 +91,8 @@ interface ManifestFetchPolicy {
   securityMode: ManifestSecurityMode;
   checkedAt: Date;
   allowMissingContentType: boolean;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }
 
 interface ManifestFetchTextResult {
@@ -137,35 +153,60 @@ export async function fetchPosemeshManifestWithVerification(
   url: string,
   options: FetchPosemeshManifestOptions = {},
 ): Promise<FetchedPosemeshManifest> {
-  const manifestUrl = await assertSafeManifestUrl(
-    url,
-    options.resolveHostname ?? defaultManifestHostResolver,
-  );
+  logDebug(options.logger, "Fetching Posemesh manifest", { url }, options.redaction);
 
-  const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
-  const fetchResult = await fetchManifestText(
-    manifestUrl.url,
-    manifestUrl.addresses,
-    {
-      timeoutMs: options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
-      maxBytes,
-      httpsRequest: options.httpsRequest ?? (request as ManifestHttpsRequest),
-      allowMissingContentType: options.allowMissingContentType ?? false,
-      ...(options.tlsPins ? { tlsPins: options.tlsPins } : {}),
-      enableDane: options.enableDane ?? false,
-      requireTlsa: options.requireTlsa ?? false,
-      resolveTlsa: options.resolveTlsa ?? defaultManifestTlsaResolver,
-      securityMode: options.securityMode ?? DEFAULT_MANIFEST_SECURITY_MODE,
-      checkedAt: (options.now ?? (() => new Date()))(),
-    },
-  );
-  const parsed = parseFetchedManifestText(fetchResult.text, url, options);
+  try {
+    const manifestUrl = await assertSafeManifestUrl(
+      url,
+      options.resolveHostname ?? defaultManifestHostResolver,
+    );
 
-  return {
-    ...parsed,
-    ...(fetchResult.dane ? { dane: fetchResult.dane } : {}),
-    warnings: [...(fetchResult.warnings ?? []), ...(parsed.warnings ?? [])],
-  };
+    const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
+    const fetchResult = await fetchManifestText(
+      manifestUrl.url,
+      manifestUrl.addresses,
+      {
+        timeoutMs: options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
+        maxBytes,
+        httpsRequest: options.httpsRequest ?? (request as ManifestHttpsRequest),
+        allowMissingContentType: options.allowMissingContentType ?? false,
+        ...(options.tlsPins ? { tlsPins: options.tlsPins } : {}),
+        enableDane: options.enableDane ?? false,
+        requireTlsa: options.requireTlsa ?? false,
+        resolveTlsa: options.resolveTlsa ?? defaultManifestTlsaResolver,
+        securityMode: options.securityMode ?? DEFAULT_MANIFEST_SECURITY_MODE,
+        checkedAt: (options.now ?? (() => new Date()))(),
+        ...(options.logger ? { logger: options.logger } : {}),
+        ...(options.redaction ? { redaction: options.redaction } : {}),
+      },
+    );
+    const parsed = parseFetchedManifestText(fetchResult.text, url, options);
+
+    logInfo(
+      options.logger,
+      "Fetched and parsed Posemesh manifest",
+      {
+        url,
+        verificationStatus: parsed.verification.status,
+        warningCount: (fetchResult.warnings ?? []).length + (parsed.warnings ?? []).length,
+      },
+      options.redaction,
+    );
+
+    return {
+      ...parsed,
+      ...(fetchResult.dane ? { dane: fetchResult.dane } : {}),
+      warnings: [...(fetchResult.warnings ?? []), ...(parsed.warnings ?? [])],
+    };
+  } catch (error) {
+    logError(
+      options.logger,
+      "Posemesh manifest fetch failed",
+      { url, ...errorLogFields(error, "MANIFEST_FETCH_ERROR") },
+      options.redaction,
+    );
+    throw error;
+  }
 }
 
 export function parsePosemeshManifest(
@@ -261,7 +302,24 @@ export function parseFetchedManifestText(
   // This is the security boundary for fetched manifests. Strict mode fails closed by default.
   const mode = options.securityMode ?? DEFAULT_MANIFEST_SECURITY_MODE;
   const now = (options.now ?? (() => new Date()))();
-  const parsed = JSON.parse(text) as unknown;
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw discoveryError(
+      "MANIFEST_PARSE_ERROR",
+      `Manifest response for ${originalUrl} was not valid JSON.`,
+      { url: originalUrl },
+      error,
+    );
+  }
+  logDebug(
+    options.logger,
+    "Parsing fetched Posemesh manifest",
+    { url: originalUrl, securityMode: mode },
+    options.redaction,
+  );
 
   if (mode === "strict") {
     return parseStrictFetchedManifest(text, originalUrl, options, now);
@@ -272,8 +330,13 @@ export function parseFetchedManifestText(
       return parseVerifiedFetchedManifest(text, originalUrl, options, now, mode !== "demo");
     } catch (error) {
       if (mode === "permissive") {
-        const message = error instanceof Error ? error.message : "Unknown signature error.";
-        throw new Error(`Permissive manifest verification failed for signed envelope: ${message}`);
+        const message = getErrorMessage(error, "Unknown signature error.");
+        throw discoveryError(
+          getErrorCode(error, "MANIFEST_SIGNATURE_INVALID"),
+          `Permissive manifest verification failed for signed envelope: ${message}`,
+          { url: originalUrl },
+          error,
+        );
       }
 
       return parseDemoInvalidSignedManifest(parsed, originalUrl, options, now, error);
@@ -285,6 +348,7 @@ export function parseFetchedManifestText(
     createManifestWarning(
       originalUrl,
       `${mode} mode accepted an unsigned manifest. Strict mode requires a signed manifest envelope.`,
+      "MANIFEST_SIGNATURE_REQUIRED",
     ),
   ];
 
@@ -311,14 +375,23 @@ function parseStrictFetchedManifest(
   const trustedKeys = options.trustedKeys ?? [];
 
   if (trustedKeys.length === 0) {
-    throw new Error("Strict manifest verification requires at least one anchored or trusted key.");
+    throw discoveryError(
+      "MANIFEST_KEY_REQUIRED",
+      "Strict manifest verification requires at least one anchored or trusted key.",
+      { url: manifestUrl },
+    );
   }
 
   try {
     return parseVerifiedFetchedManifest(text, manifestUrl, options, now, true);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown signature error.";
-    throw new Error(`Strict manifest verification failed: ${message}`, { cause: error });
+    const message = getErrorMessage(error, "Unknown signature error.");
+    throw discoveryError(
+      getErrorCode(error, "MANIFEST_SIGNATURE_INVALID"),
+      `Strict manifest verification failed: ${message}`,
+      { url: manifestUrl },
+      error,
+    );
   }
 }
 
@@ -333,10 +406,17 @@ function parseVerifiedFetchedManifest(
   const trustedKeys = options.trustedKeys ?? [];
 
   if (trustedKeys.length === 0) {
-    throw new Error("Manifest signature verification requires at least one anchored or trusted key.");
+    throw discoveryError(
+      "MANIFEST_KEY_REQUIRED",
+      "Manifest signature verification requires at least one anchored or trusted key.",
+      { url: manifestUrl },
+    );
   }
 
-  const verifiedEnvelope = verifySignedManifestEnvelopeText(text, trustedKeys, now);
+  const verifiedEnvelope = verifySignedManifestEnvelopeText(text, trustedKeys, now, {
+    ...(options.logger ? { logger: options.logger } : {}),
+    ...(options.redaction ? { redaction: options.redaction } : {}),
+  });
   const manifest = parsePosemeshManifest(
     JSON.parse(verifiedEnvelope.payloadText) as unknown,
     options.manifestLimits,
@@ -381,6 +461,7 @@ function parseDemoInvalidSignedManifest(
       createManifestWarning(
         manifestUrl,
         `demo mode accepted a manifest with invalid signature verification: ${message}`,
+        getErrorCode(verificationError, "MANIFEST_SIGNATURE_INVALID"),
       ),
     ],
   );
@@ -456,12 +537,17 @@ function decodeBase64Text(value: string, field: string): string {
   return Buffer.from(padded, "base64").toString("utf8");
 }
 
-function createManifestWarning(url: string, message: string): ParseWarning {
-  return {
+function createManifestWarning(
+  url: string,
+  message: string,
+  code?: DiscoveryErrorCode,
+): ParseWarning {
+  return createWarning({
     source: "manifest",
     url,
+    ...(code ? { code } : {}),
     message,
-  };
+  });
 }
 
 function validateManifestSecurityClaims(
@@ -504,6 +590,7 @@ function validateManifestSecurityClaims(
         createManifestWarning(
           manifestUrl,
           "demo mode accepted a signed manifest payload without issuedAt.",
+          "MANIFEST_REPLAY_INVALID",
         ),
       );
     }
@@ -513,6 +600,7 @@ function validateManifestSecurityClaims(
         createManifestWarning(
           manifestUrl,
           "demo mode accepted a signed manifest payload without expiresAt.",
+          "MANIFEST_REPLAY_INVALID",
         ),
       );
     }
@@ -801,12 +889,18 @@ function validateExpectedName(manifest: PosemeshManifest, expectedName: string |
   }
 
   if (!manifest.sourceName) {
-    throw new Error(`Manifest sourceName is required and must match requested name ${expectedName}.`);
+    throw discoveryError(
+      "MANIFEST_BINDING_MISMATCH",
+      `Manifest sourceName is required and must match requested name ${expectedName}.`,
+      { expectedName },
+    );
   }
 
   if (normalizeDiscoveryNameForBinding(manifest.sourceName) !== normalizeDiscoveryNameForBinding(expectedName)) {
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_BINDING_MISMATCH",
       `Manifest sourceName ${manifest.sourceName} does not match requested name ${expectedName}.`,
+      { expectedName, sourceName: manifest.sourceName },
     );
   }
 }
@@ -823,7 +917,11 @@ function validateExpectedManifestUrl(
 
   if (!manifest.manifestUrl) {
     if (requireManifestUrl) {
-      throw new Error("Signed manifest payload must include manifestUrl.");
+      throw discoveryError(
+        "MANIFEST_BINDING_MISMATCH",
+        "Signed manifest payload must include manifestUrl.",
+        { expectedManifestUrl },
+      );
     }
 
     if (warnMissingManifestUrl) {
@@ -831,6 +929,7 @@ function validateExpectedManifestUrl(
         createManifestWarning(
           expectedManifestUrl,
           "demo mode accepted a signed manifest payload without manifestUrl.",
+          "MANIFEST_BINDING_MISMATCH",
         ),
       ];
     }
@@ -839,8 +938,10 @@ function validateExpectedManifestUrl(
   }
 
   if (normalizeUrlString(manifest.manifestUrl) !== normalizeUrlString(expectedManifestUrl)) {
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_BINDING_MISMATCH",
       `Manifest manifestUrl ${manifest.manifestUrl} does not match requested URL ${expectedManifestUrl}.`,
+      { expectedManifestUrl, manifestUrl: manifest.manifestUrl },
     );
   }
 
@@ -864,7 +965,11 @@ function validateExpectedAudience(
 
   if (manifestAudiences.length === 0) {
     if (requireAudience) {
-      throw new Error("Signed manifest payload must include audience.");
+      throw discoveryError(
+        "MANIFEST_BINDING_MISMATCH",
+        "Signed manifest payload must include audience.",
+        { expectedAudience: expectedAudiences.join(",") },
+      );
     }
 
     return warnMissingAudience
@@ -872,6 +977,7 @@ function validateExpectedAudience(
           createManifestWarning(
             manifestUrl,
             "demo mode accepted a signed manifest payload without audience.",
+            "MANIFEST_BINDING_MISMATCH",
           ),
         ]
       : [];
@@ -880,8 +986,13 @@ function validateExpectedAudience(
   const matched = expectedAudiences.some((audience) => manifestAudiences.includes(audience));
 
   if (!matched) {
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_BINDING_MISMATCH",
       `Manifest audience ${manifest.audience?.join(", ") ?? "(empty)"} does not match expected audience ${expectedAudiences.join(", ")}.`,
+      {
+        expectedAudience: expectedAudiences.join(","),
+        manifestAudience: manifest.audience?.join(",") ?? "",
+      },
     );
   }
 
@@ -895,7 +1006,11 @@ function validateManifestTimestamp(
 ): Date | undefined {
   if (!value) {
     if (required) {
-      throw new Error(`Signed manifest payload must include ${field}.`);
+      throw discoveryError(
+        "MANIFEST_REPLAY_INVALID",
+        `Signed manifest payload must include ${field}.`,
+        { field },
+      );
     }
 
     return undefined;
@@ -904,7 +1019,11 @@ function validateManifestTimestamp(
   const parsed = new Date(value);
 
   if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
-    throw new Error(`Manifest ${field} must be a valid ISO-8601 UTC timestamp.`);
+    throw discoveryError(
+      "MANIFEST_REPLAY_INVALID",
+      `Manifest ${field} must be a valid ISO-8601 UTC timestamp.`,
+      { field },
+    );
   }
 
   return parsed;
@@ -932,23 +1051,31 @@ function validateManifestFreshness(
   const ageMs = now.getTime() - issuedAt.getTime();
 
   if (ttlMs <= 0) {
-    throw new Error("Manifest expiresAt must be after issuedAt.");
+    throw discoveryError("MANIFEST_REPLAY_INVALID", "Manifest expiresAt must be after issuedAt.");
   }
 
   if (ttlMs > maxManifestTtlMs) {
-    throw new Error(`Manifest validity window must not exceed ${maxManifestTtlMs}ms.`);
+    throw discoveryError(
+      "MANIFEST_REPLAY_INVALID",
+      `Manifest validity window must not exceed ${maxManifestTtlMs}ms.`,
+      { maxManifestTtlMs },
+    );
   }
 
   if (issuedAt.getTime() - maxClockSkewMs > now.getTime()) {
-    throw new Error("Manifest is not valid yet.");
+    throw discoveryError("MANIFEST_REPLAY_INVALID", "Manifest is not valid yet.");
   }
 
   if (maxManifestAgeMs !== undefined && ageMs > maxManifestAgeMs) {
-    throw new Error(`Manifest age must not exceed ${maxManifestAgeMs}ms.`);
+    throw discoveryError(
+      "MANIFEST_REPLAY_INVALID",
+      `Manifest age must not exceed ${maxManifestAgeMs}ms.`,
+      { maxManifestAgeMs },
+    );
   }
 
   if (expiresAt.getTime() + maxClockSkewMs < now.getTime()) {
-    throw new Error("Manifest has expired.");
+    throw discoveryError("MANIFEST_REPLAY_INVALID", "Manifest has expired.");
   }
 }
 
@@ -1172,11 +1299,15 @@ async function assertSafeManifestUrl(
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`Manifest URL is invalid: ${url}`);
+    throw discoveryError("MANIFEST_URL_INVALID", `Manifest URL is invalid: ${url}`, { url });
   }
 
   if (!isAllowedProtocol(parsed.protocol, ["https:"])) {
-    throw new Error("Manifest URL must use https.");
+    throw discoveryError(
+      "MANIFEST_URL_INVALID",
+      "Manifest URL must use https.",
+      { url, protocol: parsed.protocol },
+    );
   }
 
   const addresses = await assertPublicManifestHost(parsed.hostname, resolveHostname);
@@ -1218,8 +1349,10 @@ async function assertPublicManifestHost(
   const unsafeLiteralReason = getUnsafeManifestHostReason(host);
 
   if (unsafeLiteralReason) {
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_URL_UNSAFE",
       `Manifest URL must not use localhost, private, or reserved network addresses (${unsafeLiteralReason}).`,
+      { hostname: host, reason: unsafeLiteralReason },
     );
   }
 
@@ -1234,12 +1367,21 @@ async function assertPublicManifestHost(
   try {
     addresses = await resolveHostname(host);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown host lookup error.";
-    throw new Error(`Manifest host lookup failed for ${host}: ${message}`);
+    const message = getErrorMessage(error, "Unknown host lookup error.");
+    throw discoveryError(
+      "MANIFEST_URL_UNSAFE",
+      `Manifest host lookup failed for ${host}: ${message}`,
+      { hostname: host },
+      error,
+    );
   }
 
   if (addresses.length === 0) {
-    throw new Error(`Manifest host lookup returned no addresses for ${host}.`);
+    throw discoveryError(
+      "MANIFEST_URL_UNSAFE",
+      `Manifest host lookup returned no addresses for ${host}.`,
+      { hostname: host },
+    );
   }
 
   const normalizedAddresses: ClassifiedManifestAddress[] = addresses.map(({ address }) => {
@@ -1247,7 +1389,11 @@ async function assertPublicManifestHost(
     const resolvedFamily = isIP(normalizedAddress);
 
     if (!resolvedFamily) {
-      throw new Error(`Manifest host ${host} resolves to an invalid IP address.`);
+      throw discoveryError(
+        "MANIFEST_URL_UNSAFE",
+        `Manifest host ${host} resolves to an invalid IP address.`,
+        { hostname: host, address },
+      );
     }
 
     const unsafeReason = getUnsafeManifestHostReason(normalizedAddress);
@@ -1268,13 +1414,17 @@ async function assertPublicManifestHost(
       .join(", ");
 
     if (publicAddresses.length > 0) {
-      throw new Error(
+      throw discoveryError(
+        "MANIFEST_URL_UNSAFE",
         `Manifest host ${host} resolves to mixed public/private or reserved network addresses: ${blockedSummary}.`,
+        { hostname: host, blockedAddresses: blockedSummary },
       );
     }
 
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_URL_UNSAFE",
       `Manifest host ${host} resolves to localhost, private, or reserved network addresses: ${blockedSummary}.`,
+      { hostname: host, blockedAddresses: blockedSummary },
     );
   }
 
@@ -1500,15 +1650,33 @@ async function tryManifestAddresses(
 
   for (const address of addresses) {
     try {
+      logDebug(
+        policy.logger,
+        "Trying manifest address",
+        { url: url.toString(), address: address.address, family: address.family },
+        policy.redaction,
+      );
       return await fetchManifestTextFromAddress(url, address, policy);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown manifest fetch error.";
+      const message = getErrorMessage(error, "Unknown manifest fetch error.");
+      logWarn(
+        policy.logger,
+        "Manifest address fetch failed",
+        {
+          url: url.toString(),
+          address: address.address,
+          ...errorLogFields(error, "MANIFEST_FETCH_ERROR"),
+        },
+        policy.redaction,
+      );
       errors.push(`${address.address}: ${message}`);
     }
   }
 
-  throw new Error(
+  throw discoveryError(
+    "MANIFEST_FETCH_ERROR",
     `Manifest fetch failed for ${url.toString()} using ${addresses.length} resolved address(es): ${errors.join("; ")}`,
+    { url: url.toString(), addressCount: addresses.length },
   );
 }
 
@@ -1545,13 +1713,25 @@ function fetchManifestTextFromAddress(
 
         if (statusCode >= 300 && statusCode < 400) {
           response.resume();
-          reject(new Error(`Manifest fetch failed for ${url.toString()}: redirects are not allowed.`));
+          reject(
+            discoveryError(
+              "MANIFEST_REDIRECT_REJECTED",
+              `Manifest fetch failed for ${url.toString()}: redirects are not allowed.`,
+              { url: url.toString(), statusCode },
+            ),
+          );
           return;
         }
 
         if (statusCode < 200 || statusCode >= 300) {
           response.resume();
-          reject(new Error(`Manifest fetch failed for ${url.toString()}: HTTP ${statusCode}`));
+          reject(
+            discoveryError(
+              "MANIFEST_HTTP_ERROR",
+              `Manifest fetch failed for ${url.toString()}: HTTP ${statusCode}`,
+              { url: url.toString(), statusCode },
+            ),
+          );
           return;
         }
 
@@ -1572,8 +1752,10 @@ function fetchManifestTextFromAddress(
         if (!isAllowedJsonContentType(declaredContentType, policy.allowMissingContentType)) {
           response.resume();
           reject(
-            new Error(
+            discoveryError(
+              "MANIFEST_CONTENT_TYPE_INVALID",
               `Manifest response for ${url.toString()} must use Content-Type application/json.`,
+              { url: url.toString(), contentType: declaredContentType ?? "" },
             ),
           );
           return;
@@ -1584,7 +1766,13 @@ function fetchManifestTextFromAddress(
 
         if (declaredLength && Number(declaredLength) > policy.maxBytes) {
           response.resume();
-          reject(new Error(`Manifest response is larger than ${policy.maxBytes} bytes.`));
+          reject(
+            discoveryError(
+              "MANIFEST_TOO_LARGE",
+              `Manifest response is larger than ${policy.maxBytes} bytes.`,
+              { url: url.toString(), maxBytes: policy.maxBytes },
+            ),
+          );
           return;
         }
 
@@ -1592,7 +1780,13 @@ function fetchManifestTextFromAddress(
           bytesRead += chunk.byteLength;
 
           if (bytesRead > policy.maxBytes) {
-            req.destroy(new Error(`Manifest response is larger than ${policy.maxBytes} bytes.`));
+            req.destroy(
+              discoveryError(
+                "MANIFEST_TOO_LARGE",
+                `Manifest response is larger than ${policy.maxBytes} bytes.`,
+                { url: url.toString(), maxBytes: policy.maxBytes },
+              ),
+            );
             return;
           }
 
@@ -1612,7 +1806,13 @@ function fetchManifestTextFromAddress(
     );
 
     req.setTimeout(policy.timeoutMs, () => {
-      req.destroy(new Error(`Manifest fetch timed out after ${policy.timeoutMs}ms.`));
+      req.destroy(
+        discoveryError(
+          "MANIFEST_TIMEOUT",
+          `Manifest fetch timed out after ${policy.timeoutMs}ms.`,
+          { url: url.toString(), timeoutMs: policy.timeoutMs },
+        ),
+      );
     });
 
     req.on("error", reject);
@@ -1635,7 +1835,11 @@ function assertTlsSpkiPin(
   const normalizedPins = pins.map(normalizeSpkiPin);
 
   if (!normalizedPins.includes(actualPin)) {
-    throw new Error(`TLS SPKI pin mismatch for ${normalizeHost(url.hostname)}.`);
+    throw discoveryError(
+      "MANIFEST_TLS_PIN_MISMATCH",
+      `TLS SPKI pin mismatch for ${normalizeHost(url.hostname)}.`,
+      { hostname: normalizeHost(url.hostname) },
+    );
   }
 }
 
@@ -1670,7 +1874,7 @@ async function validateManifestDane(
       });
     }
 
-    const message = error instanceof Error ? error.message : "Unknown TLSA lookup error.";
+    const message = getErrorMessage(error, "Unknown TLSA lookup error.");
     const dane = {
       ...base,
       status: "failed" as const,
@@ -1679,12 +1883,23 @@ async function validateManifestDane(
     };
 
     if (policy.requireTlsa) {
-      throw new Error(dane.error);
+      throw discoveryError(
+        "DANE_TLSA_LOOKUP_ERROR",
+        dane.error,
+        { host, port, recordName },
+        error,
+      );
     }
 
     return {
       dane,
-      warnings: [createManifestWarning(url.toString(), `${dane.error}; falling back to normal TLS validation.`)],
+      warnings: [
+        createManifestWarning(
+          url.toString(),
+          `${dane.error}; falling back to normal TLS validation.`,
+          "DANE_TLSA_LOOKUP_ERROR",
+        ),
+      ],
     };
   }
 
@@ -1708,7 +1923,11 @@ async function validateManifestDane(
       error: "Presented TLS certificate did not match any TLSA record.",
     };
 
-    throw new Error(dane.error);
+    throw discoveryError(
+      "DANE_TLSA_MISMATCH",
+      dane.error,
+      { host, port, recordName, recordCount: records.length },
+    );
   }
 
   return {
@@ -1734,12 +1953,16 @@ function handleMissingTlsaRecords(
   const message = `No TLSA records found for ${dane.recordName}; falling back to normal TLS validation.`;
 
   if (policy.requireTlsa) {
-    throw new Error(`TLSA records are required for ${normalizeHost(url.hostname)} but none were found.`);
+    throw discoveryError(
+      "DANE_TLSA_REQUIRED",
+      `TLSA records are required for ${normalizeHost(url.hostname)} but none were found.`,
+      { host: normalizeHost(url.hostname), recordName: dane.recordName },
+    );
   }
 
   return {
     dane,
-    warnings: [createManifestWarning(url.toString(), message)],
+    warnings: [createManifestWarning(url.toString(), message, "DANE_TLSA_LOOKUP_ERROR")],
   };
 }
 
@@ -1752,19 +1975,22 @@ function normalizeTlsaRecord(record: ManifestTlsaRecord): NormalizedTlsaRecord {
   const data = record.certificateAssociationData ?? record.data;
 
   if (!Number.isInteger(record.certUsage) || record.certUsage < 0 || record.certUsage > 3) {
-    throw new Error("TLSA certUsage must be 0, 1, 2, or 3.");
+    throw discoveryError("DANE_TLSA_LOOKUP_ERROR", "TLSA certUsage must be 0, 1, 2, or 3.");
   }
 
   if (record.selector !== 0 && record.selector !== 1) {
-    throw new Error("TLSA selector must be 0 or 1.");
+    throw discoveryError("DANE_TLSA_LOOKUP_ERROR", "TLSA selector must be 0 or 1.");
   }
 
   if (matchingType !== 0 && matchingType !== 1 && matchingType !== 2) {
-    throw new Error("TLSA matching type must be 0, 1, or 2.");
+    throw discoveryError("DANE_TLSA_LOOKUP_ERROR", "TLSA matching type must be 0, 1, or 2.");
   }
 
   if (data === undefined) {
-    throw new Error("TLSA record is missing certificate association data.");
+    throw discoveryError(
+      "DANE_TLSA_LOOKUP_ERROR",
+      "TLSA record is missing certificate association data.",
+    );
   }
 
   return {
@@ -1785,7 +2011,10 @@ function decodeTlsaAssociationData(value: string | ArrayBuffer | Uint8Array): Bu
     }
 
     if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed)) {
-      throw new Error("TLSA certificate association data must be hex, base64, or base64url.");
+      throw discoveryError(
+        "DANE_TLSA_LOOKUP_ERROR",
+        "TLSA certificate association data must be hex, base64, or base64url.",
+      );
     }
 
     const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
@@ -1807,7 +2036,10 @@ function readPeerCertificateChain(response: { socket?: unknown }): PeerCertifica
   const leaf = socket?.getPeerCertificate?.(true);
 
   if (!leaf) {
-    throw new Error("TLSA validation is configured, but the peer certificate was unavailable.");
+    throw discoveryError(
+      "DANE_TLSA_MISMATCH",
+      "TLSA validation is configured, but the peer certificate was unavailable.",
+    );
   }
 
   const certificates: PeerCertificate[] = [];
@@ -1863,7 +2095,7 @@ function doesTlsaRecordMatchCertificate(
 function selectTlsaCertificateBytes(certificate: PeerCertificate, selector: number): Buffer {
   if (selector === 0) {
     if (!Buffer.isBuffer(certificate.raw)) {
-      throw new Error("TLSA selector 0 requires raw certificate bytes.");
+      throw discoveryError("DANE_TLSA_MISMATCH", "TLSA selector 0 requires raw certificate bytes.");
     }
 
     return certificate.raw;
@@ -1878,7 +2110,10 @@ function selectTlsaCertificateBytes(certificate: PeerCertificate, selector: numb
     return certificate.pubkey;
   }
 
-  throw new Error("TLSA selector 1 requires certificate public key bytes.");
+  throw discoveryError(
+    "DANE_TLSA_MISMATCH",
+    "TLSA selector 1 requires certificate public key bytes.",
+  );
 }
 
 function applyTlsaMatchingType(value: Buffer, matchingType: number): Buffer {
@@ -1920,7 +2155,10 @@ function readResponseSpkiSha256(response: { socket?: unknown }): string {
   const certificate = socket?.getPeerCertificate?.(true);
 
   if (!certificate) {
-    throw new Error("TLS SPKI pinning is configured, but the peer certificate was unavailable.");
+    throw discoveryError(
+      "MANIFEST_TLS_PIN_MISMATCH",
+      "TLS SPKI pinning is configured, but the peer certificate was unavailable.",
+    );
   }
 
   if (Buffer.isBuffer(certificate.raw)) {
@@ -1933,7 +2171,10 @@ function readResponseSpkiSha256(response: { socket?: unknown }): string {
     return createHash("sha256").update(certificate.pubkey).digest("base64");
   }
 
-  throw new Error("TLS SPKI pinning is configured, but no public key material was available.");
+  throw discoveryError(
+    "MANIFEST_TLS_PIN_MISMATCH",
+    "TLS SPKI pinning is configured, but no public key material was available.",
+  );
 }
 
 function normalizeSpkiPin(pin: string): string {

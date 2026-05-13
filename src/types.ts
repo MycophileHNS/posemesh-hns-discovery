@@ -6,6 +6,68 @@ export type ManifestSecurityMode = "strict" | "permissive" | "demo";
 export type ManifestSignatureAlgorithm = "ed25519" | "ecdsa-p256-sha256";
 export type ManifestCacheStatus = "fresh" | "stale" | "uncacheable";
 export type ManifestDaneStatus = "not-requested" | "validated" | "no-records" | "failed";
+export type DiscoveryErrorCode =
+  | "UNKNOWN_ERROR"
+  | "INVALID_POSEMESH_NAME"
+  | "TXT_LOOKUP_ERROR"
+  | "TXT_NO_RECORDS"
+  | "TXT_NO_COMPATIBLE_RECORDS"
+  | "TXT_PARSE_ERROR"
+  | "TXT_LIMIT_EXCEEDED"
+  | "TXT_AMBIGUOUS_MANIFEST"
+  | "RESOLVER_LOOKUP_ERROR"
+  | "RESOLVER_CONSENSUS_FAILED"
+  | "RESOLVER_UNSUPPORTED"
+  | "MANIFEST_FETCH_ERROR"
+  | "MANIFEST_URL_INVALID"
+  | "MANIFEST_URL_UNSAFE"
+  | "MANIFEST_HTTP_ERROR"
+  | "MANIFEST_REDIRECT_REJECTED"
+  | "MANIFEST_CONTENT_TYPE_INVALID"
+  | "MANIFEST_TOO_LARGE"
+  | "MANIFEST_TIMEOUT"
+  | "MANIFEST_TLS_PIN_MISMATCH"
+  | "MANIFEST_PARSE_ERROR"
+  | "MANIFEST_SCHEMA_INVALID"
+  | "MANIFEST_SIGNATURE_REQUIRED"
+  | "MANIFEST_SIGNATURE_INVALID"
+  | "MANIFEST_KEY_REQUIRED"
+  | "MANIFEST_KEY_INACTIVE"
+  | "MANIFEST_REPLAY_INVALID"
+  | "MANIFEST_BINDING_MISMATCH"
+  | "MANIFEST_PUBLIC_KEY_INVALID"
+  | "DANE_TLSA_LOOKUP_ERROR"
+  | "DANE_TLSA_REQUIRED"
+  | "DANE_TLSA_MISMATCH";
+
+export type DiscoveryLogValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | DiscoveryLogValue[]
+  | { [key: string]: DiscoveryLogValue };
+
+export interface DiscoveryLogFields {
+  [key: string]: DiscoveryLogValue;
+}
+
+export interface DiscoveryLogger {
+  debug(message: string, fields?: DiscoveryLogFields): void;
+  info(message: string, fields?: DiscoveryLogFields): void;
+  warn(message: string, fields?: DiscoveryLogFields): void;
+  error(message: string, fields?: DiscoveryLogFields): void;
+}
+
+export interface LoggerRedactionOptions {
+  /**
+   * Case-insensitive field names that should be replaced before data is sent
+   * to the caller-provided logger.
+   */
+  redactKeys?: string[];
+  replacement?: string;
+}
 
 export interface PosemeshServiceEndpoint {
   id?: string;
@@ -187,6 +249,7 @@ export interface DetailedResolverAttempt<TRecord> {
   resolver: string;
   status: Exclude<ResolverStatus, "consensus-failed">;
   records: TRecord[];
+  code?: DiscoveryErrorCode;
   error?: string;
 }
 
@@ -196,6 +259,7 @@ export interface DetailedResolverResult<TRecord> {
   status: ResolverStatus;
   records: TRecord[];
   resolver?: string;
+  code?: DiscoveryErrorCode;
   error?: string;
   attempts?: DetailedResolverAttempt<TRecord>[];
 }
@@ -204,6 +268,7 @@ export interface ParseWarning {
   source: "txt" | "manifest";
   record?: string;
   url?: string;
+  code?: DiscoveryErrorCode;
   message: string;
 }
 
@@ -222,6 +287,12 @@ export interface ParserLimits {
   maxCapabilities?: number;
   maxPublicKeys?: number;
   maxAgentIdentityBytes?: number;
+}
+
+export interface ParserOptions {
+  limits?: ParserLimits;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }
 
 export interface ManifestLimits {
@@ -303,6 +374,8 @@ export interface FetchPosemeshManifestOptions {
   maxClockSkewMs?: number;
   maxManifestTtlMs?: number;
   maxManifestAgeMs?: number;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }
 
 export interface FetchedPosemeshManifest {
@@ -327,4 +400,6 @@ export interface DiscoverPosemeshOptions {
   manifestFetchOptions?: FetchPosemeshManifestOptions;
   manifestFetcher?: ManifestFetcher;
   now?: () => Date;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }

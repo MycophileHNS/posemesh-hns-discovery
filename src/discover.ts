@@ -1,5 +1,16 @@
 import { fetchPosemeshManifestWithVerification } from "./manifest.ts";
 import { assertValidPosemeshName, normalizeName } from "./name.ts";
+import {
+  createWarning,
+  discoveryError,
+  errorLogFields,
+  getErrorCode,
+  getErrorMessage,
+  logDebug,
+  logError,
+  logInfo,
+  logWarn,
+} from "./observability.ts";
 import { parseTxtRecords } from "./parser.ts";
 import { DnsResolver } from "./resolvers.ts";
 import type {
@@ -20,9 +31,37 @@ export async function discoverPosemesh(
   options: DiscoverPosemeshOptions = {},
 ): Promise<NormalizedDiscoveryResult> {
   const normalizedName = assertValidPosemeshName(name);
-  const resolver = options.resolver ?? new DnsResolver(options.dnsServer);
-  const txtRecords = await resolver.resolveTxt(normalizedName);
-  const parsedTxt = parseTxtRecords(txtRecords, options.parserLimits);
+  logDebug(options.logger, "Starting Posemesh discovery", { name: normalizedName }, options.redaction);
+  const resolver =
+    options.resolver ??
+    new DnsResolver(options.dnsServer, options.dnsServer ? `dns:${options.dnsServer}` : "dns", {
+      ...(options.logger ? { logger: options.logger } : {}),
+      ...(options.redaction ? { redaction: options.redaction } : {}),
+    });
+  let txtRecords: string[];
+
+  try {
+    txtRecords = await resolver.resolveTxt(normalizedName);
+  } catch (error) {
+    logError(
+      options.logger,
+      "TXT lookup failed during Posemesh discovery",
+      { name: normalizedName, ...errorLogFields(error, "TXT_LOOKUP_ERROR") },
+      options.redaction,
+    );
+    throw discoveryError(
+      getErrorCode(error, "TXT_LOOKUP_ERROR"),
+      `TXT lookup failed for ${normalizedName}: ${getErrorMessage(error)}`,
+      { name: normalizedName },
+      error,
+    );
+  }
+
+  const parsedTxt = parseTxtRecords(txtRecords, {
+    ...(options.parserLimits ? { limits: options.parserLimits } : {}),
+    ...(options.logger ? { logger: options.logger } : {}),
+    ...(options.redaction ? { redaction: options.redaction } : {}),
+  });
   const shouldFetchManifest = options.fetchManifest ?? true;
   const warnings = [...parsedTxt.warnings];
   appendDiscoveryRecordWarning(normalizedName, txtRecords, parsedTxt.records, warnings);
@@ -33,6 +72,8 @@ export async function discoverPosemesh(
     parsedTxt.records,
     options.manifestFetchOptions,
     options.tlsaResolver,
+    options.logger,
+    options.redaction,
   );
   let manifest: PosemeshManifest | undefined;
   let manifestVerification: ManifestVerificationResult | undefined;
@@ -65,15 +106,23 @@ export async function discoverPosemesh(
         manifestDane = undefined;
       }
     } catch (error) {
-      warnings.push({
+      const warning = createWarning({
         source: "manifest",
         url: manifestUrl,
-        message: error instanceof Error ? error.message : "Unknown manifest fetch error.",
+        code: getErrorCode(error, "MANIFEST_FETCH_ERROR"),
+        message: getErrorMessage(error, "Unknown manifest fetch error."),
       });
+      warnings.push(warning);
+      logWarn(
+        options.logger,
+        "Manifest fetch warning during Posemesh discovery",
+        { name: normalizedName, url: manifestUrl, code: warning.code ?? "MANIFEST_FETCH_ERROR" },
+        options.redaction,
+      );
     }
   }
 
-  return normalizeDiscoveryResult({
+  const result = normalizeDiscoveryResult({
     name: normalizedName,
     records: parsedTxt.records,
     warnings,
@@ -84,6 +133,20 @@ export async function discoverPosemesh(
     ...(manifestCache ? { manifestCache } : {}),
     ...(manifestDane ? { manifestDane } : {}),
   });
+
+  logInfo(
+    options.logger,
+    "Finished Posemesh discovery",
+    {
+      name: normalizedName,
+      capabilityCount: result.capabilities.length,
+      publicKeyCount: result.publicKeys.length,
+      warningCount: result.warnings.length,
+    },
+    options.redaction,
+  );
+
+  return result;
 }
 
 interface NormalizeInput {
@@ -144,14 +207,20 @@ function createManifestFetchOptions(
   records: ReturnType<typeof parseTxtRecords>["records"],
   options: FetchPosemeshManifestOptions | undefined,
   tlsaResolver: TlsaResolver | undefined,
+  logger: DiscoverPosemeshOptions["logger"],
+  redaction: DiscoverPosemeshOptions["redaction"],
 ): FetchPosemeshManifestOptions {
   const anchoredKeys = collectManifestVerificationKeys(records);
   const trustedKeys = uniqueVerificationKeys([...(options?.trustedKeys ?? []), ...anchoredKeys]);
+  const resolvedLogger = options?.logger ?? logger;
+  const resolvedRedaction = options?.redaction ?? redaction;
   const fetchOptions: FetchPosemeshManifestOptions = {
     ...(options ?? {}),
     trustedKeys,
     expectedName: options?.expectedName ?? name,
     ...(manifestUrl ? { expectedManifestUrl: options?.expectedManifestUrl ?? manifestUrl } : {}),
+    ...(resolvedLogger ? { logger: resolvedLogger } : {}),
+    ...(resolvedRedaction ? { redaction: resolvedRedaction } : {}),
   };
 
   if (!fetchOptions.resolveTlsa && tlsaResolver) {
@@ -197,18 +266,20 @@ function appendDiscoveryRecordWarning(
   warnings: ReturnType<typeof parseTxtRecords>["warnings"],
 ): void {
   if (txtRecords.length === 0) {
-    warnings.push({
+    warnings.push(createWarning({
       source: "txt",
+      code: "TXT_NO_RECORDS",
       message: `No TXT records found for ${name}. Live lookups require a Handshake-aware resolver.`,
-    });
+    }));
     return;
   }
 
   if (records.length === 0 && warnings.length === 0) {
-    warnings.push({
+    warnings.push(createWarning({
       source: "txt",
+      code: "TXT_NO_COMPATIBLE_RECORDS",
       message: `No compatible posemesh:v1 or agent-identity:v1 TXT records found for ${name}.`,
-    });
+    }));
   }
 }
 
@@ -219,11 +290,12 @@ function selectManifestUrl(
   const manifestUrls = uniqueStrings(records.flatMap((record) => record.manifestUrl ?? []));
 
   if (manifestUrls.length > 1) {
-    warnings.push({
+    warnings.push(createWarning({
       source: "txt",
+      code: "TXT_AMBIGUOUS_MANIFEST",
       message:
         "Multiple distinct manifest URLs were found; skipping manifest fetch to avoid DNS TXT record ordering ambiguity.",
-    });
+    }));
     return undefined;
   }
 
@@ -239,6 +311,7 @@ function validateManifestIdentity(
     return {
       source: "manifest",
       url: manifestUrl,
+      code: "MANIFEST_BINDING_MISMATCH",
       message: `Manifest sourceName is required and must match requested name ${name}.`,
     };
   }
@@ -251,6 +324,7 @@ function validateManifestIdentity(
       return {
         source: "manifest",
         url: manifestUrl,
+        code: "MANIFEST_BINDING_MISMATCH",
         message: `Manifest name ${manifest.name} does not match requested name ${name}.`,
       };
     }
@@ -261,6 +335,7 @@ function validateManifestIdentity(
   return {
     source: "manifest",
     url: manifestUrl,
+    code: "MANIFEST_BINDING_MISMATCH",
     message: `Manifest sourceName ${manifest.sourceName} does not match requested name ${name}.`,
   };
 }

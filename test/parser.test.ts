@@ -55,6 +55,7 @@ describe("TXT parsing", () => {
 
     assert.equal(result.records.length, 0);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
     assert.match(result.warnings[0]?.message ?? "", /https/);
   });
 
@@ -68,6 +69,7 @@ describe("TXT parsing", () => {
     assert.equal(result.records.length, 1);
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
     assert.deepEqual(result.records[0]?.publicKeys, [TXT_PUBLIC_KEY]);
     assert.deepEqual(result.records[0]?.capabilities, ["relay-discovery"]);
   });
@@ -79,6 +81,7 @@ describe("TXT parsing", () => {
 
     assert.equal(result.records.length, 0);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
     assert.match(result.warnings[0]?.message ?? "", /hex or base64/);
   });
 
@@ -96,6 +99,23 @@ describe("TXT parsing", () => {
     );
 
     assert.equal(result.records.length, 0);
+    assert.equal(result.warnings[0]?.code, "TXT_LIMIT_EXCEEDED");
     assert.match(result.warnings[0]?.message ?? "", /exceeds 8 bytes/);
+  });
+
+  it("supports optional redacted parser logging", () => {
+    const warnFields: unknown[] = [];
+    const logger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: (_message: string, fields?: unknown) => warnFields.push(fields),
+      error: () => undefined,
+    };
+
+    parseTxtRecords(["posemesh:v1; publicKey=not_a_hex_or_base64_key"], { logger });
+
+    assert.equal(warnFields.length, 1);
+    assert.equal((warnFields[0] as { record?: string }).record, undefined);
+    assert.equal(typeof (warnFields[0] as { recordBytes?: number }).recordBytes, "number");
   });
 });

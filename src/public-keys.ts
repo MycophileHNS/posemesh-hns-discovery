@@ -1,4 +1,5 @@
 import { createPublicKey } from "node:crypto";
+import { discoveryError } from "./observability.ts";
 import type { ManifestSignatureAlgorithm } from "./types.ts";
 
 const HEX_PUBLIC_KEY = /^(?:0x)?[0-9a-f]+$/i;
@@ -14,19 +15,19 @@ export function parsePublicKey(
   const bytes = decodePublicKey(publicKey, field);
 
   if (algorithm === "ed25519" && bytes.byteLength !== 32) {
-    throw new Error(`${field} must be a hex or base64 encoded 32-byte Ed25519 public key.`);
+    throw publicKeyError(`${field} must be a hex or base64 encoded 32-byte Ed25519 public key.`);
   }
 
   if (algorithm === "ecdsa-p256-sha256" && !isP256PublicKey(bytes)) {
-    throw new Error(`${field} must be a hex or base64 encoded valid P-256 public key.`);
+    throw publicKeyError(`${field} must be a hex or base64 encoded valid P-256 public key.`);
   }
 
   if (!algorithm && !isGenericKnownPublicKey(bytes)) {
-    throw new Error(`${field} must be a hex or base64 encoded Ed25519 or P-256 public key.`);
+    throw publicKeyError(`${field} must be a hex or base64 encoded Ed25519 or P-256 public key.`);
   }
 
   if (bytes.byteLength > MAX_GENERIC_PUBLIC_KEY_BYTES) {
-    throw new Error(`${field} must not exceed ${MAX_GENERIC_PUBLIC_KEY_BYTES} bytes.`);
+    throw publicKeyError(`${field} must not exceed ${MAX_GENERIC_PUBLIC_KEY_BYTES} bytes.`);
   }
 
   return publicKey;
@@ -45,21 +46,21 @@ export function decodePublicKey(value: string, field: string): Buffer {
   const publicKey = value.trim();
 
   if (!publicKey) {
-    throw new Error(`${field} must not be empty.`);
+    throw publicKeyError(`${field} must not be empty.`);
   }
 
   if (HEX_PUBLIC_KEY.test(publicKey)) {
     const hex = publicKey.replace(/^0x/i, "");
 
     if (hex.length === 0 || hex.length % 2 !== 0) {
-      throw new Error(`${field} must be valid even-length hex.`);
+      throw publicKeyError(`${field} must be valid even-length hex.`);
     }
 
     return Buffer.from(hex, "hex");
   }
 
   if (!BASE64_PUBLIC_KEY.test(publicKey)) {
-    throw new Error(`${field} must be hex, base64, or base64url.`);
+    throw publicKeyError(`${field} must be hex, base64, or base64url.`);
   }
 
   const normalized = publicKey.replace(/-/g, "+").replace(/_/g, "/");
@@ -67,7 +68,7 @@ export function decodePublicKey(value: string, field: string): Buffer {
   const decoded = Buffer.from(padded, "base64");
 
   if (decoded.byteLength === 0) {
-    throw new Error(`${field} must decode to public key bytes.`);
+    throw publicKeyError(`${field} must decode to public key bytes.`);
   }
 
   return decoded;
@@ -92,4 +93,8 @@ function isP256PublicKey(bytes: Buffer): boolean {
 
 function isGenericKnownPublicKey(bytes: Buffer): boolean {
   return bytes.byteLength === 32 || isP256PublicKey(bytes);
+}
+
+function publicKeyError(message: string): Error {
+  return discoveryError("MANIFEST_PUBLIC_KEY_INVALID", message);
 }

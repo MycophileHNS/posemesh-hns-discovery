@@ -1,5 +1,8 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { discoveryError, logDebug } from "./observability.ts";
 import type {
+  DiscoveryLogger,
+  LoggerRedactionOptions,
   ManifestSignatureAlgorithm,
   ManifestVerificationKey,
   ManifestVerificationResult,
@@ -23,6 +26,11 @@ export interface VerifiedManifestEnvelope {
   verification: ManifestVerificationResult;
 }
 
+interface VerificationObservabilityOptions {
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
+}
+
 export function createManifestSigningBytes(payloadBytes: Uint8Array): Buffer {
   return Buffer.concat([MANIFEST_SIGNATURE_CONTEXT, Buffer.from(payloadBytes)]);
 }
@@ -31,6 +39,7 @@ export function verifySignedManifestEnvelopeText(
   text: string,
   trustedKeys: ManifestVerificationKey[],
   now: Date,
+  observability: VerificationObservabilityOptions = {},
 ): VerifiedManifestEnvelope {
   const parsed = JSON.parse(text) as unknown;
   const envelope = parseSignedManifestEnvelope(parsed);
@@ -38,9 +47,29 @@ export function verifySignedManifestEnvelopeText(
   const signature = decodeKeyMaterial(envelope.signature, "manifest envelope signature");
   const signingBytes = createManifestSigningBytes(payloadBytes);
   const matchingKeys = selectMatchingKeys(envelope, trustedKeys, now);
+  logDebug(
+    observability.logger,
+    "Verifying signed manifest envelope",
+    {
+      algorithm: envelope.algorithm,
+      keyId: envelope.keyId ?? "",
+      candidateKeyCount: matchingKeys.length,
+    },
+    observability.redaction,
+  );
 
   for (const key of matchingKeys) {
     if (verifyWithKey(envelope.algorithm, key.publicKey, signingBytes, signature)) {
+      logDebug(
+        observability.logger,
+        "Manifest signature verified",
+        {
+          algorithm: envelope.algorithm,
+          keyId: envelope.keyId ?? key.id ?? "",
+          keySource: key.source,
+        },
+        observability.redaction,
+      );
       return {
         envelope,
         payloadText: payloadBytes.toString("utf8"),
@@ -57,16 +86,24 @@ export function verifySignedManifestEnvelopeText(
     }
   }
 
-  throw new Error("Manifest signature verification failed for all trusted keys.");
+  throw discoveryError(
+    "MANIFEST_SIGNATURE_INVALID",
+    "Manifest signature verification failed for all trusted keys.",
+    {
+      algorithm: envelope.algorithm,
+      keyId: envelope.keyId ?? "",
+      candidateKeyCount: matchingKeys.length,
+    },
+  );
 }
 
 export function parseSignedManifestEnvelope(value: unknown): SignedPosemeshManifestEnvelope {
   if (!isRecord(value)) {
-    throw new Error("Signed manifest envelope must be a JSON object.");
+    throw discoveryError("MANIFEST_SIGNATURE_REQUIRED", "Signed manifest envelope must be a JSON object.");
   }
 
   if (value.version !== 1) {
-    throw new Error("Signed manifest envelope version must be 1.");
+    throw discoveryError("MANIFEST_SIGNATURE_INVALID", "Signed manifest envelope version must be 1.");
   }
 
   if (
@@ -74,7 +111,8 @@ export function parseSignedManifestEnvelope(value: unknown): SignedPosemeshManif
     !isNonEmptyString(value.signature) ||
     !isNonEmptyString(value.algorithm)
   ) {
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_SIGNATURE_REQUIRED",
       "Strict manifest verification requires a signed manifest envelope with payload, signature, and algorithm.",
     );
   }
@@ -101,7 +139,7 @@ export function parseManifestSignatureAlgorithm(
     return value;
   }
 
-  throw new Error(`${field} must be ed25519 or ecdsa-p256-sha256.`);
+  throw discoveryError("MANIFEST_SIGNATURE_INVALID", `${field} must be ed25519 or ecdsa-p256-sha256.`);
 }
 
 function selectMatchingKeys(
@@ -123,15 +161,21 @@ function selectMatchingKeys(
 
   if (matchingKeys.length === 0) {
     const keyId = envelope.keyId ? ` with keyId ${envelope.keyId}` : "";
-    throw new Error(`No trusted ${envelope.algorithm} manifest verification key${keyId}.`);
+    throw discoveryError(
+      "MANIFEST_KEY_REQUIRED",
+      `No trusted ${envelope.algorithm} manifest verification key${keyId}.`,
+      { algorithm: envelope.algorithm, keyId: envelope.keyId ?? "" },
+    );
   }
 
   const activeKeys = matchingKeys.filter((key) => isVerificationKeyActive(key, now));
 
   if (activeKeys.length === 0) {
     const keyId = envelope.keyId ? ` with keyId ${envelope.keyId}` : "";
-    throw new Error(
+    throw discoveryError(
+      "MANIFEST_KEY_INACTIVE",
       `No currently valid ${envelope.algorithm} manifest verification key${keyId}.`,
+      { algorithm: envelope.algorithm, keyId: envelope.keyId ?? "" },
     );
   }
 
@@ -143,7 +187,10 @@ function isVerificationKeyActive(key: ManifestVerificationKey, now: Date): boole
   const notAfter = parseOptionalKeyTimestamp(key.notAfter, "notAfter");
 
   if (notBefore && notAfter && notAfter.getTime() <= notBefore.getTime()) {
-    throw new Error("Manifest verification key notAfter must be after notBefore.");
+    throw discoveryError(
+      "MANIFEST_KEY_INACTIVE",
+      "Manifest verification key notAfter must be after notBefore.",
+    );
   }
 
   if (notBefore && notBefore.getTime() > now.getTime()) {
@@ -165,7 +212,11 @@ function parseOptionalKeyTimestamp(value: string | undefined, field: string): Da
   const parsed = new Date(value);
 
   if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
-    throw new Error(`Manifest verification key ${field} must be a valid ISO-8601 UTC timestamp.`);
+    throw discoveryError(
+      "MANIFEST_KEY_INACTIVE",
+      `Manifest verification key ${field} must be a valid ISO-8601 UTC timestamp.`,
+      { field },
+    );
   }
 
   return parsed;
@@ -194,7 +245,7 @@ function createEd25519PublicKey(publicKey: string): ReturnType<typeof createPubl
   const raw = decodeKeyMaterial(publicKey, "Ed25519 public key");
 
   if (raw.byteLength !== 32) {
-    throw new Error("Ed25519 public key must be 32 bytes.");
+    throw discoveryError("MANIFEST_PUBLIC_KEY_INVALID", "Ed25519 public key must be 32 bytes.");
   }
 
   return createPublicKey({
@@ -227,14 +278,17 @@ function createP256PublicKey(publicKey: string): ReturnType<typeof createPublicK
     }
   }
 
-  throw new Error("P-256 public key must be SPKI DER, compressed, or uncompressed point bytes.");
+  throw discoveryError(
+    "MANIFEST_PUBLIC_KEY_INVALID",
+    "P-256 public key must be SPKI DER, compressed, or uncompressed point bytes.",
+  );
 }
 
 function decodeKeyMaterial(value: string, field: string): Buffer {
   const trimmed = value.trim();
 
   if (!trimmed) {
-    throw new Error(`${field} must not be empty.`);
+    throw discoveryError("MANIFEST_SIGNATURE_INVALID", `${field} must not be empty.`);
   }
 
   const hex = trimmed.replace(/^0x/i, "");
@@ -244,7 +298,7 @@ function decodeKeyMaterial(value: string, field: string): Buffer {
   }
 
   if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed)) {
-    throw new Error(`${field} must be hex, base64, or base64url.`);
+    throw discoveryError("MANIFEST_SIGNATURE_INVALID", `${field} must be hex, base64, or base64url.`);
   }
 
   const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
@@ -254,7 +308,7 @@ function decodeKeyMaterial(value: string, field: string): Buffer {
 
 function requiredString(value: unknown, field: string): string {
   if (!isNonEmptyString(value)) {
-    throw new Error(`${field} must be a non-empty string.`);
+    throw discoveryError("MANIFEST_SIGNATURE_INVALID", `${field} must be a non-empty string.`);
   }
 
   return value.trim();

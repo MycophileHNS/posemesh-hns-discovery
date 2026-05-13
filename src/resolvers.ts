@@ -1,8 +1,19 @@
 import { Resolver } from "node:dns/promises";
+import {
+  discoveryError,
+  errorLogFields,
+  getErrorCode,
+  getErrorMessage,
+  logDebug,
+  logWarn,
+} from "./observability.ts";
 import type {
   CompositeResolverStrategy,
   DetailedResolverAttempt,
   DetailedResolverResult,
+  DiscoveryErrorCode,
+  DiscoveryLogger,
+  LoggerRedactionOptions,
   ManifestTlsaRecord,
   ResolverRecordType,
   ResolverStatus,
@@ -24,6 +35,8 @@ interface CompositeResolverOptions {
   strategy?: CompositeResolverStrategy;
   quorum?: number;
   name?: string;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }
 
 interface DohResolverOptions {
@@ -31,12 +44,16 @@ interface DohResolverOptions {
   fetch?: FetchLike;
   timeoutMs?: number;
   name?: string;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }
 
 interface DotResolverOptions {
   server: string;
   port?: number;
   name?: string;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
 }
 
 interface FetchLikeResponse {
@@ -68,6 +85,8 @@ export class MockResolver implements TxtResolver, TlsaResolver {
     options: {
       name?: string;
       tlsaRecords?: Record<string, ManifestTlsaRecord[]> | Map<string, ManifestTlsaRecord[]>;
+      logger?: DiscoveryLogger;
+      redaction?: LoggerRedactionOptions;
     } = {},
   ) {
     const entries = records instanceof Map ? records.entries() : Object.entries(records);
@@ -124,10 +143,18 @@ export class MockResolver implements TxtResolver, TlsaResolver {
 export class DnsResolver implements TxtResolver, TlsaResolver {
   readonly name: string;
   private readonly resolver: Resolver;
+  private readonly logger: DiscoveryLogger | undefined;
+  private readonly redaction: LoggerRedactionOptions | undefined;
 
-  constructor(server?: string, name = server ? `dns:${server}` : "dns") {
+  constructor(
+    server?: string,
+    name = server ? `dns:${server}` : "dns",
+    options: { logger?: DiscoveryLogger; redaction?: LoggerRedactionOptions } = {},
+  ) {
     this.name = name;
     this.resolver = new Resolver();
+    this.logger = options.logger;
+    this.redaction = options.redaction;
 
     if (server) {
       this.resolver.setServers([server]);
@@ -141,6 +168,7 @@ export class DnsResolver implements TxtResolver, TlsaResolver {
 
   async resolveTxtDetailed(name: string): Promise<DetailedResolverResult<string>> {
     const normalizedName = normalizeDnsName(name);
+    logDebug(this.logger, "Resolving TXT records", { name: normalizedName, resolver: this.name }, this.redaction);
 
     try {
       const answers = await this.resolver.resolveTxt(normalizedName);
@@ -151,6 +179,12 @@ export class DnsResolver implements TxtResolver, TlsaResolver {
         records: answers.map((segments) => segments.join("")),
       });
     } catch (error) {
+      logWarn(
+        this.logger,
+        "TXT lookup failed",
+        { name: normalizedName, resolver: this.name, ...errorLogFields(error, "RESOLVER_LOOKUP_ERROR") },
+        this.redaction,
+      );
       return createLookupErrorResult(normalizedName, "TXT", this.name, error);
     }
   }
@@ -165,6 +199,7 @@ export class DnsResolver implements TxtResolver, TlsaResolver {
     port: number,
   ): Promise<DetailedResolverResult<ManifestTlsaRecord>> {
     const recordName = createTlsaRecordName(hostname, port);
+    logDebug(this.logger, "Resolving TLSA records", { name: recordName, resolver: this.name }, this.redaction);
 
     try {
       const records = (await this.resolver.resolveTlsa(recordName)) as ManifestTlsaRecord[];
@@ -175,6 +210,12 @@ export class DnsResolver implements TxtResolver, TlsaResolver {
         records,
       });
     } catch (error) {
+      logWarn(
+        this.logger,
+        "TLSA lookup failed",
+        { name: recordName, resolver: this.name, ...errorLogFields(error, "RESOLVER_LOOKUP_ERROR") },
+        this.redaction,
+      );
       return createLookupErrorResult(recordName, "TLSA", this.name, error);
     }
   }
@@ -185,6 +226,8 @@ export class CompositeResolver implements TxtResolver, TlsaResolver {
   private readonly resolvers: ResolverCandidate[];
   private readonly strategy: CompositeResolverStrategy;
   private readonly quorum?: number;
+  private readonly logger: DiscoveryLogger | undefined;
+  private readonly redaction: LoggerRedactionOptions | undefined;
 
   constructor(resolvers: ResolverCandidate[], options: CompositeResolverOptions = {}) {
     if (resolvers.length === 0) {
@@ -194,6 +237,8 @@ export class CompositeResolver implements TxtResolver, TlsaResolver {
     this.resolvers = resolvers;
     this.strategy = options.strategy ?? "first-success";
     this.name = options.name ?? `composite:${this.strategy}`;
+    this.logger = options.logger;
+    this.redaction = options.redaction;
 
     if (options.quorum !== undefined) {
       if (!Number.isInteger(options.quorum) || options.quorum < 1) {
@@ -242,13 +287,21 @@ export class CompositeResolver implements TxtResolver, TlsaResolver {
     ) => Promise<DetailedResolverAttempt<TRecord>>,
   ): Promise<DetailedResolverResult<TRecord>> {
     if (this.strategy === "first-success") {
-      return resolveFirstSuccess(name, type, this.name, this.resolvers, resolveAttempt);
+      return resolveFirstSuccess(
+        name,
+        type,
+        this.name,
+        this.resolvers,
+        resolveAttempt,
+        this.logger,
+        this.redaction,
+      );
     }
 
     const attempts = await Promise.all(this.resolvers.map(resolveAttempt));
 
     if (this.strategy === "strict-consensus") {
-      return resolveStrictConsensus(name, type, this.name, attempts);
+      return resolveStrictConsensus(name, type, this.name, attempts, this.logger, this.redaction);
     }
 
     return resolveQuorum(
@@ -257,6 +310,8 @@ export class CompositeResolver implements TxtResolver, TlsaResolver {
       this.name,
       attempts,
       this.quorum ?? Math.floor(this.resolvers.length / 2) + 1,
+      this.logger,
+      this.redaction,
     );
   }
 }
@@ -266,12 +321,16 @@ export class DohResolver implements TxtResolver, TlsaResolver {
   private readonly endpoint: string;
   private readonly fetch: FetchLike;
   private readonly timeoutMs: number;
+  private readonly logger: DiscoveryLogger | undefined;
+  private readonly redaction: LoggerRedactionOptions | undefined;
 
   constructor(options: DohResolverOptions = {}) {
     this.endpoint = options.endpoint ?? DEFAULT_DOH_ENDPOINT;
     this.fetch = options.fetch ?? (globalThis.fetch as FetchLike);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_DOH_TIMEOUT_MS;
     this.name = options.name ?? `doh:${this.endpoint}`;
+    this.logger = options.logger;
+    this.redaction = options.redaction;
 
     if (!this.fetch) {
       throw new Error("DohResolver requires native fetch or an injected fetch implementation.");
@@ -315,6 +374,7 @@ export class DohResolver implements TxtResolver, TlsaResolver {
         type: "TLSA",
         resolver: result.resolver ?? this.name,
         status: result.status,
+        ...(result.code ? { code: result.code } : {}),
         records: [],
         ...(result.error ? { error: result.error } : {}),
       });
@@ -337,6 +397,7 @@ export class DohResolver implements TxtResolver, TlsaResolver {
     const url = new URL(this.endpoint);
     url.searchParams.set("name", name);
     url.searchParams.set("type", String(DNS_TYPE[type]));
+    logDebug(this.logger, "Resolving records over DoH", { name, type, resolver: this.name }, this.redaction);
 
     try {
       const response = await this.fetch(url.toString(), {
@@ -345,11 +406,18 @@ export class DohResolver implements TxtResolver, TlsaResolver {
       });
 
       if (!response.ok) {
+        logWarn(
+          this.logger,
+          "DoH server returned an error",
+          { name, type, resolver: this.name, status: response.status },
+          this.redaction,
+        );
         return createDetailedResult({
           name,
           type,
           resolver: this.name,
           status: "lookup-error",
+          code: "RESOLVER_LOOKUP_ERROR",
           records: [],
           error: `DoH server returned HTTP ${response.status}.`,
         });
@@ -357,13 +425,20 @@ export class DohResolver implements TxtResolver, TlsaResolver {
 
       return parseDohJsonResponse(name, type, this.name, await response.json());
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown DoH lookup error.";
+      const message = getErrorMessage(error, "Unknown DoH lookup error.");
+      logWarn(
+        this.logger,
+        "DoH lookup failed",
+        { name, type, resolver: this.name, ...errorLogFields(error, "RESOLVER_LOOKUP_ERROR") },
+        this.redaction,
+      );
 
       return createDetailedResult({
         name,
         type,
         resolver: this.name,
         status: "lookup-error",
+        code: "RESOLVER_LOOKUP_ERROR",
         records: [],
         error: `DoH lookup failed: ${message}`,
       });
@@ -377,11 +452,15 @@ export class DotResolver implements TxtResolver, TlsaResolver {
   readonly name: string;
   readonly server: string;
   readonly port: number;
+  private readonly logger: DiscoveryLogger | undefined;
+  private readonly redaction: LoggerRedactionOptions | undefined;
 
   constructor(options: DotResolverOptions) {
     this.server = options.server;
     this.port = options.port ?? 853;
     this.name = options.name ?? `dot:${this.server}:${this.port}`;
+    this.logger = options.logger;
+    this.redaction = options.redaction;
   }
 
   async resolveTxt(name: string): Promise<string[]> {
@@ -409,11 +488,18 @@ export class DotResolver implements TxtResolver, TlsaResolver {
     name: string,
     type: ResolverRecordType,
   ): DetailedResolverResult<TRecord> {
+    logWarn(
+      this.logger,
+      "DNS-over-TLS resolver is not implemented",
+      { name, type, resolver: this.name },
+      this.redaction,
+    );
     return createDetailedResult({
       name,
       type,
       resolver: this.name,
       status: "lookup-error",
+      code: "RESOLVER_UNSUPPORTED",
       records: [],
       error: "DNS-over-TLS resolver is a stub in this prototype.",
     });
@@ -429,6 +515,8 @@ async function resolveFirstSuccess<TRecord>(
     resolver: ResolverCandidate,
     index: number,
   ) => Promise<DetailedResolverAttempt<TRecord>>,
+  logger?: DiscoveryLogger,
+  redaction?: LoggerRedactionOptions,
 ): Promise<DetailedResolverResult<TRecord>> {
   const attempts: DetailedResolverAttempt<TRecord>[] = [];
 
@@ -460,11 +548,19 @@ async function resolveFirstSuccess<TRecord>(
     });
   }
 
+  logWarn(
+    logger,
+    "All resolvers failed",
+    { name, type, resolver: compositeName },
+    redaction,
+  );
+
   return createDetailedResult({
     name,
     type,
     resolver: compositeName,
     status: "lookup-error",
+    code: "RESOLVER_LOOKUP_ERROR",
     records: [],
     attempts,
     error: "All resolvers failed.",
@@ -477,6 +573,8 @@ function resolveQuorum<TRecord>(
   compositeName: string,
   attempts: DetailedResolverAttempt<TRecord>[],
   quorum: number,
+  logger?: DiscoveryLogger,
+  redaction?: LoggerRedactionOptions,
 ): DetailedResolverResult<TRecord> {
   const winner = findRecordSetWinner(attempts, quorum);
 
@@ -491,11 +589,19 @@ function resolveQuorum<TRecord>(
     });
   }
 
+  logWarn(
+    logger,
+    "Resolver quorum failed",
+    { name, type, resolver: compositeName, quorum },
+    redaction,
+  );
+
   return createDetailedResult({
     name,
     type,
     resolver: compositeName,
     status: "consensus-failed",
+    code: "RESOLVER_CONSENSUS_FAILED",
     records: [],
     attempts,
     error: `No resolver answer reached quorum ${quorum}.`,
@@ -507,13 +613,22 @@ function resolveStrictConsensus<TRecord>(
   type: ResolverRecordType,
   compositeName: string,
   attempts: DetailedResolverAttempt<TRecord>[],
+  logger?: DiscoveryLogger,
+  redaction?: LoggerRedactionOptions,
 ): DetailedResolverResult<TRecord> {
   if (attempts.some((attempt) => attempt.status === "lookup-error")) {
+    logWarn(
+      logger,
+      "Strict resolver consensus failed on lookup error",
+      { name, type, resolver: compositeName },
+      redaction,
+    );
     return createDetailedResult({
       name,
       type,
       resolver: compositeName,
       status: "lookup-error",
+      code: "RESOLVER_LOOKUP_ERROR",
       records: [],
       attempts,
       error: "Strict consensus failed because at least one resolver returned a lookup error.",
@@ -533,11 +648,19 @@ function resolveStrictConsensus<TRecord>(
     });
   }
 
+  logWarn(
+    logger,
+    "Strict resolver consensus failed on mismatched answers",
+    { name, type, resolver: compositeName },
+    redaction,
+  );
+
   return createDetailedResult({
     name,
     type,
     resolver: compositeName,
     status: "consensus-failed",
+    code: "RESOLVER_CONSENSUS_FAILED",
     records: [],
     attempts,
     error: "Strict consensus failed because resolver answers differed.",
@@ -602,7 +725,10 @@ async function resolveTlsaAttempt(
 ): Promise<DetailedResolverAttempt<ManifestTlsaRecord>> {
   const resolverName = getResolverName(resolver, index);
   if (!resolver.resolveTlsa && !resolver.resolveTlsaDetailed) {
-    return createAttemptError(resolverName, new Error("Resolver does not support TLSA lookups."));
+    return createAttemptError(
+      resolverName,
+      discoveryError("RESOLVER_UNSUPPORTED", "Resolver does not support TLSA lookups."),
+    );
   }
 
   try {
@@ -618,7 +744,10 @@ async function resolveTlsaAttempt(
         records: await resolver.resolveTlsa(hostname, port),
       });
     } else {
-      return createAttemptError(resolverName, new Error("Resolver does not support TLSA lookups."));
+      return createAttemptError(
+        resolverName,
+        discoveryError("RESOLVER_UNSUPPORTED", "Resolver does not support TLSA lookups."),
+      );
     }
 
     return toAttempt(result, resolverName);
@@ -639,6 +768,7 @@ function parseDohJsonResponse(
       type,
       resolver,
       status: "lookup-error",
+      code: "RESOLVER_LOOKUP_ERROR",
       records: [],
       error: "DoH response was not a JSON object.",
     });
@@ -656,6 +786,7 @@ function parseDohJsonResponse(
       type,
       resolver,
       status: "lookup-error",
+      code: "RESOLVER_LOOKUP_ERROR",
       records: [],
       error: `DoH response returned DNS status ${dnsStatus ?? "unknown"}.`,
     });
@@ -707,6 +838,7 @@ function createDetailedResult<TRecord>(input: {
   resolver: string;
   records: TRecord[];
   status?: ResolverStatus;
+  code?: DiscoveryErrorCode;
   error?: string;
   attempts?: DetailedResolverAttempt<TRecord>[];
 }): DetailedResolverResult<TRecord> {
@@ -718,6 +850,7 @@ function createDetailedResult<TRecord>(input: {
     status,
     records: input.records,
     resolver: input.resolver,
+    ...(input.code ? { code: input.code } : {}),
     ...(input.error ? { error: input.error } : {}),
     ...(input.attempts ? { attempts: input.attempts } : {}),
   };
@@ -739,6 +872,7 @@ function createLookupErrorResult<TRecord>(
     type,
     resolver,
     status: "lookup-error",
+    code: getErrorCode(error, "RESOLVER_LOOKUP_ERROR"),
     records: [],
     error: `${type} lookup failed for ${name}: ${message}`,
   });
@@ -749,7 +883,11 @@ function unwrapDetailedResult<TRecord>(result: DetailedResolverResult<TRecord>):
     return result.records;
   }
 
-  throw new Error(result.error ?? `${result.type} lookup failed for ${result.name}.`);
+  throw discoveryError(
+    result.code ?? "RESOLVER_LOOKUP_ERROR",
+    result.error ?? `${result.type} lookup failed for ${result.name}.`,
+    { name: result.name, type: result.type, resolver: result.resolver ?? "" },
+  );
 }
 
 function toAttempt<TRecord>(
@@ -761,6 +899,7 @@ function toAttempt<TRecord>(
     status:
       result.status === "ok" || result.status === "no-records" ? result.status : "lookup-error",
     records: result.records,
+    ...(result.code ? { code: result.code } : {}),
     ...(result.error ? { error: result.error } : {}),
   };
 }
@@ -773,7 +912,8 @@ function createAttemptError<TRecord>(
     resolver,
     status: "lookup-error",
     records: [],
-    error: error instanceof Error ? error.message : "Unknown resolver error.",
+    code: getErrorCode(error, "RESOLVER_LOOKUP_ERROR"),
+    error: getErrorMessage(error, "Unknown resolver error."),
   };
 }
 

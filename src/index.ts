@@ -7,6 +7,12 @@ export {
 } from "./manifest.ts";
 export { assertValidPosemeshName, normalizeName, validatePosemeshName } from "./name.ts";
 export {
+  DiscoveryError,
+  discoveryError,
+  getErrorCode,
+  getErrorMessage,
+} from "./observability.ts";
+export {
   createManifestSigningBytes,
   parseManifestSignatureAlgorithm,
   parseSignedManifestEnvelope,
@@ -24,6 +30,10 @@ export type {
   CompositeResolverStrategy,
   DetailedResolverAttempt,
   DetailedResolverResult,
+  DiscoveryErrorCode,
+  DiscoveryLogger,
+  DiscoveryLogFields,
+  DiscoveryLogValue,
   DiscoverPosemeshOptions,
   DomainManager,
   FetchedPosemeshManifest,
@@ -46,8 +56,10 @@ export type {
   NormalizedDiscoveryResult,
   PathfindingService,
   ParsedTxtRecords,
+  ParserOptions,
   ParserLimits,
   ParseWarning,
+  LoggerRedactionOptions,
   PosemeshDiscoveryRecord,
   PosemeshManifest,
   PosemeshServiceEndpoint,

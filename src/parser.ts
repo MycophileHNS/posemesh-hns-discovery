@@ -1,9 +1,13 @@
 import { parsePublicKey } from "./public-keys.ts";
 import { parseManifestSignatureAlgorithm } from "./security.ts";
+import { createWarning, getErrorCode, getErrorMessage, logDebug, logWarn } from "./observability.ts";
 import type {
+  DiscoveryLogger,
+  LoggerRedactionOptions,
   ManifestSignatureAlgorithm,
   ManifestVerificationKey,
   ParsedTxtRecords,
+  ParserOptions,
   ParserLimits,
   PosemeshDiscoveryRecord,
 } from "./types.ts";
@@ -23,6 +27,14 @@ interface ResolvedParserLimits {
   maxAgentIdentityBytes: number;
 }
 
+type ParserInput = ParserLimits | ParserOptions;
+
+interface ResolvedParserInput {
+  limits: ParserLimits;
+  logger?: DiscoveryLogger;
+  redaction?: LoggerRedactionOptions;
+}
+
 const DEFAULT_PARSER_LIMITS: ResolvedParserLimits = {
   maxTxtRecords: 32,
   maxTxtRecordBytes: 4_096,
@@ -37,9 +49,16 @@ const DEFAULT_PARSER_LIMITS: ResolvedParserLimits = {
 
 export function parseTxtRecords(
   txtRecords: string[],
-  limits: ParserLimits = {},
+  input: ParserInput = {},
 ): ParsedTxtRecords {
-  const resolvedLimits = resolveParserLimits(limits);
+  const parserOptions = resolveParserInput(input);
+  const resolvedLimits = resolveParserLimits(parserOptions.limits);
+  logDebug(
+    parserOptions.logger,
+    "Parsing TXT records",
+    { recordCount: txtRecords.length },
+    parserOptions.redaction,
+  );
   enforceMaxCount(txtRecords.length, resolvedLimits.maxTxtRecords, "TXT records");
   enforceMaxBytes(
     txtRecords.reduce((total, record) => total + byteLength(record), 0),
@@ -58,22 +77,41 @@ export function parseTxtRecords(
         parsed.push(discoveryRecord);
       }
     } catch (error) {
-      warnings.push({
+      const warning = createWarning({
         source: "txt",
         record,
-        message: error instanceof Error ? error.message : "Unknown TXT parsing error.",
+        code: getErrorCode(error, "TXT_PARSE_ERROR"),
+        message: getErrorMessage(error, "Unknown TXT parsing error."),
       });
+      warnings.push(warning);
+      logWarn(
+        parserOptions.logger,
+        "TXT record parse warning",
+        {
+          code: warning.code ?? "TXT_PARSE_ERROR",
+          message: warning.message,
+          recordBytes: byteLength(record),
+        },
+        parserOptions.redaction,
+      );
     }
   }
+
+  logDebug(
+    parserOptions.logger,
+    "Finished parsing TXT records",
+    { recordCount: parsed.length, warningCount: warnings.length },
+    parserOptions.redaction,
+  );
 
   return { records: parsed, warnings };
 }
 
 export function parseTxtRecord(
   record: string,
-  limits: ParserLimits = {},
+  input: ParserInput = {},
 ): PosemeshDiscoveryRecord | undefined {
-  const resolvedLimits = resolveParserLimits(limits);
+  const resolvedLimits = resolveParserLimits(resolveParserInput(input).limits);
   enforceMaxBytes(byteLength(record), resolvedLimits.maxTxtRecordBytes, "TXT record");
   const trimmed = record.trim();
 
@@ -90,9 +128,9 @@ export function parseTxtRecord(
 
 export function parsePosemeshTxt(
   record: string,
-  limits: ParserLimits = {},
+  input: ParserInput = {},
 ): PosemeshDiscoveryRecord {
-  const resolvedLimits = resolveParserLimits(limits);
+  const resolvedLimits = resolveParserLimits(resolveParserInput(input).limits);
   enforceMaxBytes(byteLength(record), resolvedLimits.maxTxtRecordBytes, "posemesh TXT record");
   const [prefix, ...parts] = record.split(";").map((part) => part.trim());
 
@@ -167,9 +205,9 @@ export function parsePosemeshTxt(
 
 export function parseAgentIdentityTxt(
   record: string,
-  limits: ParserLimits = {},
+  input: ParserInput = {},
 ): PosemeshDiscoveryRecord {
-  const resolvedLimits = resolveParserLimits(limits);
+  const resolvedLimits = resolveParserLimits(resolveParserInput(input).limits);
   enforceMaxBytes(
     byteLength(record),
     resolvedLimits.maxAgentIdentityBytes,
@@ -369,6 +407,18 @@ function resolveParserLimits(limits: ParserLimits): ResolvedParserLimits {
   };
 }
 
+function resolveParserInput(input: ParserInput): ResolvedParserInput {
+  if ("limits" in input || "logger" in input || "redaction" in input) {
+    return {
+      limits: input.limits ?? {},
+      ...(input.logger ? { logger: input.logger } : {}),
+      ...(input.redaction ? { redaction: input.redaction } : {}),
+    };
+  }
+
+  return { limits: input as ParserLimits };
+}
+
 function readPositiveIntegerLimit(
   value: number | undefined,
   fallback: number,
@@ -379,7 +429,7 @@ function readPositiveIntegerLimit(
   }
 
   if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`Parser limit ${field} must be a positive integer.`);
+    throw discoveryLimitError(`Parser limit ${field} must be a positive integer.`);
   }
 
   return value;
@@ -387,13 +437,13 @@ function readPositiveIntegerLimit(
 
 function enforceMaxCount(count: number, max: number, field: string): void {
   if (count > max) {
-    throw new Error(`${field} exceeds limit ${max}.`);
+    throw discoveryLimitError(`${field} exceeds limit ${max}.`);
   }
 }
 
 function enforceMaxBytes(bytes: number, max: number, field: string): void {
   if (bytes > max) {
-    throw new Error(`${field} exceeds ${max} bytes.`);
+    throw discoveryLimitError(`${field} exceeds ${max} bytes.`);
   }
 }
 
@@ -404,4 +454,8 @@ function limitArray<T>(items: T[], max: number, field: string): T[] {
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
+}
+
+function discoveryLimitError(message: string): Error {
+  return Object.assign(new Error(message), { code: "TXT_LIMIT_EXCEEDED" as const });
 }

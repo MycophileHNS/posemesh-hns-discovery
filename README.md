@@ -189,6 +189,18 @@ Production clients still need Auki-owned signing policy, key rotation rules, and
 
 For safety, the built-in manifest fetcher only follows `https:` manifest URLs, rejects redirects, checks hostnames for localhost/private/reserved addresses, pins the checked address for the request, applies a timeout, and limits response size. Those guardrails are still prototype defaults, not a full production trust model; production clients should use stronger network isolation and signed manifests because DNS answers can change over time.
 
+## Security Model & Threat Model
+
+This prototype now has explicit security modes, structured error codes, parser limits, manifest limits, and optional logger hooks so reviewers can see how discovery fails instead of guessing from strings or silent fallbacks.
+
+The default live manifest mode is `strict`. In strict mode, a fetched manifest must be a signed envelope, the signature must verify, the key must be anchored in TXT metadata or supplied by the caller, and the signed payload must match the requested `.posemesh` name and manifest URL. Signed manifests also require `issuedAt` and `expiresAt` so clients can reject stale or replayed metadata.
+
+The main threats considered are TXT tampering, manifest tampering, replay, unsafe manifest URLs, resolver failure or disagreement, oversized inputs, and misleading logs. Current mitigations include HTTPS-only manifest URLs, rejection of private or reserved resolved addresses, redirect blocking, strict `application/json` responses, byte and timeout limits, optional DANE TLSA validation, optional multi-resolver strategies, and redacted structured logging.
+
+Important limitations remain. This is still not official Auki software. It does not prove that Auki controls `.posemesh`, does not define Auki’s production key governance, does not implement a full client cache, and does not replace a production security review.
+
+For the detailed threat model, see [`docs/threat-model.md`](docs/threat-model.md).
+
 ## Run the demo
 
 This project can run on recent Node.js versions that support built-in TypeScript transforms. No live DNS records are required for the default demo.
