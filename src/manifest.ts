@@ -1,4 +1,4 @@
-import { lookup, resolveTlsa } from "node:dns/promises";
+import { lookup } from "node:dns/promises";
 import { createHash, X509Certificate } from "node:crypto";
 import { request } from "node:https";
 import { isIP } from "node:net";
@@ -124,6 +124,9 @@ interface ManifestSecurityValidation {
 }
 
 type ManifestClaimPolicy = "strict-signed" | "demo-signed" | "unsigned";
+type NodeDnsPromisesWithTlsa = typeof import("node:dns/promises") & {
+  resolveTlsa?: (name: string) => Promise<ManifestTlsaRecord[]>;
+};
 
 const defaultManifestHostResolver: ManifestHostResolver = async (hostname) => {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
@@ -134,8 +137,24 @@ const defaultManifestHostResolver: ManifestHostResolver = async (hostname) => {
 };
 
 const defaultManifestTlsaResolver: ManifestTlsaResolver = async (hostname, port) => {
-  return resolveTlsa(createTlsaRecordName(hostname, port));
+  const builtInResolveTlsa = await loadBuiltInResolveTlsa();
+  return builtInResolveTlsa(createTlsaRecordName(hostname, port));
 };
+
+async function loadBuiltInResolveTlsa(): Promise<
+  (name: string) => Promise<ManifestTlsaRecord[]>
+> {
+  const dnsPromises = (await import("node:dns/promises")) as NodeDnsPromisesWithTlsa;
+
+  if (typeof dnsPromises.resolveTlsa !== "function") {
+    throw discoveryError(
+      "RESOLVER_UNSUPPORTED",
+      "Node.js 22.15 or newer is required for built-in TLSA support. Pass a custom resolveTlsa implementation or disable DANE.",
+    );
+  }
+
+  return dnsPromises.resolveTlsa;
+}
 
 export async function fetchPosemeshManifest(
   url: string,
