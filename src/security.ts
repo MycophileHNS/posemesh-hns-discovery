@@ -37,7 +37,7 @@ export function verifySignedManifestEnvelopeText(
   const payloadBytes = decodeKeyMaterial(envelope.payload, "manifest envelope payload");
   const signature = decodeKeyMaterial(envelope.signature, "manifest envelope signature");
   const signingBytes = createManifestSigningBytes(payloadBytes);
-  const matchingKeys = selectMatchingKeys(envelope, trustedKeys);
+  const matchingKeys = selectMatchingKeys(envelope, trustedKeys, now);
 
   for (const key of matchingKeys) {
     if (verifyWithKey(envelope.algorithm, key.publicKey, signingBytes, signature)) {
@@ -49,6 +49,8 @@ export function verifySignedManifestEnvelopeText(
           algorithm: envelope.algorithm,
           ...(envelope.keyId ? { keyId: envelope.keyId } : key.id ? { keyId: key.id } : {}),
           keySource: key.source,
+          ...(key.notBefore ? { keyNotBefore: key.notBefore } : {}),
+          ...(key.notAfter ? { keyNotAfter: key.notAfter } : {}),
           verifiedAt: now.toISOString(),
         },
       };
@@ -105,6 +107,7 @@ export function parseManifestSignatureAlgorithm(
 function selectMatchingKeys(
   envelope: SignedPosemeshManifestEnvelope,
   trustedKeys: ManifestVerificationKey[],
+  now: Date,
 ): ManifestVerificationKey[] {
   const matchingKeys = trustedKeys.filter((key) => {
     if (key.algorithm !== envelope.algorithm) {
@@ -123,7 +126,49 @@ function selectMatchingKeys(
     throw new Error(`No trusted ${envelope.algorithm} manifest verification key${keyId}.`);
   }
 
-  return matchingKeys;
+  const activeKeys = matchingKeys.filter((key) => isVerificationKeyActive(key, now));
+
+  if (activeKeys.length === 0) {
+    const keyId = envelope.keyId ? ` with keyId ${envelope.keyId}` : "";
+    throw new Error(
+      `No currently valid ${envelope.algorithm} manifest verification key${keyId}.`,
+    );
+  }
+
+  return activeKeys;
+}
+
+function isVerificationKeyActive(key: ManifestVerificationKey, now: Date): boolean {
+  const notBefore = parseOptionalKeyTimestamp(key.notBefore, "notBefore");
+  const notAfter = parseOptionalKeyTimestamp(key.notAfter, "notAfter");
+
+  if (notBefore && notAfter && notAfter.getTime() <= notBefore.getTime()) {
+    throw new Error("Manifest verification key notAfter must be after notBefore.");
+  }
+
+  if (notBefore && notBefore.getTime() > now.getTime()) {
+    return false;
+  }
+
+  if (notAfter && notAfter.getTime() < now.getTime()) {
+    return false;
+  }
+
+  return true;
+}
+
+function parseOptionalKeyTimestamp(value: string | undefined, field: string): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = new Date(value);
+
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw new Error(`Manifest verification key ${field} must be a valid ISO-8601 UTC timestamp.`);
+  }
+
+  return parsed;
 }
 
 function verifyWithKey(

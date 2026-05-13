@@ -164,7 +164,14 @@ function uniqueVerificationKeys(keys: ManifestVerificationKey[]): ManifestVerifi
 
   return keys.filter((key) => {
     const id = key.id ?? "";
-    const cacheKey = `${key.source}:${key.algorithm}:${id}:${key.publicKey}`;
+    const cacheKey = [
+      key.source,
+      key.algorithm,
+      id,
+      key.publicKey,
+      key.notBefore ?? "",
+      key.notAfter ?? "",
+    ].join(":");
 
     if (seen.has(cacheKey)) {
       return false;

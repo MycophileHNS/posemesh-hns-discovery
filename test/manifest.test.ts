@@ -83,6 +83,7 @@ describe("Posemesh manifest parsing", () => {
           role: "operator",
         },
       ],
+      audience: "posemesh-client",
       healthCheck: "https://example.com/health",
     });
 
@@ -95,6 +96,7 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(manifest.pathfindingServices?.[0]?.id, "pathfinding");
     assert.equal(manifest.bootstrapNodes?.[0]?.id, "bootstrap");
     assert.equal(manifest.wallets?.[0]?.address, "wallet-1");
+    assert.deepEqual(manifest.audience, ["posemesh-client"]);
     assert.equal(manifest.healthCheck, "https://example.com/health");
   });
 
@@ -653,6 +655,143 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(fetched.manifest.sourceName, "hq.posemesh");
     assert.equal(fetched.verification.status, "invalid-allowed");
     assert.match(fetched.warnings?.[0]?.message ?? "", /demo mode accepted/);
+  });
+
+  it("requires issuedAt and expiresAt in strict signed manifests", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /include issuedAt/,
+    );
+  });
+
+  it("allows missing replay timestamps in demo mode with warnings", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(signed.body),
+      securityMode: "demo",
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.manifest.sourceName, "hq.posemesh");
+    assert.match(
+      fetched.warnings?.map((warning) => warning.message).join("\n") ?? "",
+      /without issuedAt[\s\S]*without expiresAt/,
+    );
+  });
+
+  it("normalizes signed sourceName, manifestUrl, and audience bindings", async () => {
+    const requestedUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "HQ.POSEMESH.",
+      manifestUrl: "https://MANIFEST.EXAMPLE.TEST./posemesh.json",
+      audience: ["Posemesh-Client."],
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(requestedUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(signed.body),
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      expectedAudience: "posemesh-client",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.verification.status, "verified");
+  });
+
+  it("requires configured audience in strict signed manifests", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          expectedAudience: "posemesh-client",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /include audience/,
+    );
+  });
+
+  it("ignores verification keys outside their rotation window", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [
+            {
+              ...signed.trustedKey,
+              notAfter: "2026-05-11T00:00:00.000Z",
+            },
+          ],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /No currently valid/,
+    );
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(signed.body),
+      trustedKeys: [
+        {
+          ...signed.trustedKey,
+          notBefore: "2026-05-11T00:00:00.000Z",
+          notAfter: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.verification.keyNotBefore, "2026-05-11T00:00:00.000Z");
+    assert.equal(fetched.verification.keyNotAfter, "2026-05-13T00:00:00.000Z");
   });
 
   it("verifies ECDSA P-256 signed manifests", async () => {

@@ -50,6 +50,7 @@ export interface PosemeshManifest {
   name?: string;
   sourceName?: string;
   manifestUrl?: string;
+  audience?: string[];
   issuedAt?: string;
   expiresAt?: string;
   regions?: string[];
@@ -83,6 +84,16 @@ export interface ManifestVerificationKey {
   algorithm: ManifestSignatureAlgorithm;
   publicKey: string;
   source: "txt" | "trusted";
+  /**
+   * Optional ISO-8601 UTC activation time for key rotation.
+   * Before this instant the key is ignored for manifest verification.
+   */
+  notBefore?: string;
+  /**
+   * Optional ISO-8601 UTC expiration time for key rotation.
+   * After this instant the key is ignored for manifest verification.
+   */
+  notAfter?: string;
 }
 
 export interface SignedPosemeshManifestEnvelope {
@@ -98,6 +109,8 @@ export interface ManifestVerificationResult {
   algorithm?: ManifestSignatureAlgorithm;
   keyId?: string;
   keySource?: ManifestVerificationKey["source"];
+  keyNotBefore?: string;
+  keyNotAfter?: string;
   verifiedAt: string;
   issuedAt?: string;
   expiresAt?: string;
@@ -224,6 +237,11 @@ export interface FetchPosemeshManifestOptions {
   allowMissingContentType?: boolean;
   expectedName?: string;
   expectedManifestUrl?: string;
+  /**
+   * Optional audience binding for signed manifest payloads. When set, signed
+   * manifests must include at least one matching audience value outside demo mode.
+   */
+  expectedAudience?: string | string[];
   now?: () => Date;
   maxClockSkewMs?: number;
   maxManifestTtlMs?: number;

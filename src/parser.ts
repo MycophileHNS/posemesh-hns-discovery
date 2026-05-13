@@ -79,17 +79,28 @@ export function parsePosemeshTxt(record: string): PosemeshDiscoveryRecord {
 
   const manifestUrl = values.get("manifest");
   const publicKey = values.get("publicKey");
+  const publicKeysCsv = splitCsv(values.get("publicKeys"));
   const keyId = values.get("keyId");
   const algorithm = parseOptionalAlgorithm(values.get("alg"));
+  const notBefore = parseOptionalTimestamp(values.get("notBefore"), "notBefore");
+  const notAfter = parseOptionalTimestamp(values.get("notAfter"), "notAfter");
   const capabilities = splitCsv(values.get("capabilities"));
-  const publicKeys = publicKey ? [parsePublicKey(publicKey, "TXT field publicKey")] : [];
+  const publicKeys = uniqueStrings([
+    ...(publicKey ? [parsePublicKey(publicKey, "TXT field publicKey")] : []),
+    ...publicKeysCsv.map((key, index) =>
+      parsePublicKey(key, `TXT field publicKeys[${index}]`),
+    ),
+  ]);
 
   const result: PosemeshDiscoveryRecord = {
     kind: "posemesh",
     version: 1,
     raw: record,
     publicKeys,
-    verificationKeys: createVerificationKeys(publicKeys, algorithm, keyId),
+    verificationKeys: createVerificationKeys(publicKeys, algorithm, keyId, {
+      ...(notBefore ? { notBefore } : {}),
+      ...(notAfter ? { notAfter } : {}),
+    }),
     capabilities,
   };
 
@@ -134,12 +145,14 @@ function createVerificationKeys(
   publicKeys: string[],
   algorithm: ManifestSignatureAlgorithm,
   keyId: string | undefined,
+  validity: Pick<ManifestVerificationKey, "notBefore" | "notAfter">,
 ): ManifestVerificationKey[] {
   return publicKeys.map((publicKey) => ({
     ...(keyId ? { id: keyId } : {}),
     algorithm,
     publicKey,
     source: "txt",
+    ...validity,
   }));
 }
 
@@ -160,6 +173,25 @@ function splitCsv(value: string | undefined): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseOptionalTimestamp(value: string | undefined, field: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  const parsed = new Date(trimmed);
+
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== trimmed) {
+    throw new Error(`TXT field ${field} must be a valid ISO-8601 UTC timestamp.`);
+  }
+
+  return trimmed;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function extractPublicKeys(value: Record<string, unknown>): string[] {

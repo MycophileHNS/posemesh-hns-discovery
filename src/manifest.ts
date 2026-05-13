@@ -73,6 +73,13 @@ interface ClassifiedManifestAddress extends ManifestResolvedAddress {
   unsafeReason?: string;
 }
 
+interface ManifestSecurityValidation {
+  verification: ManifestVerificationResult;
+  warnings: ParseWarning[];
+}
+
+type ManifestClaimPolicy = "strict-signed" | "demo-signed" | "unsigned";
+
 const defaultManifestHostResolver: ManifestHostResolver = async (hostname) => {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
   return addresses.map(({ address, family }) => ({
@@ -146,6 +153,7 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     ...optionalStringField(value, "name"),
     ...optionalStringField(value, "sourceName"),
     ...optionalUrlField(value, "manifestUrl", ["https:"]),
+    audience: parseAudience(value.audience),
     ...optionalStringField(value, "issuedAt"),
     ...optionalStringField(value, "expiresAt"),
     regions: parseStringArray(value.regions),
@@ -195,7 +203,7 @@ export function parseFetchedManifestText(
 
   if (looksLikeSignedManifestEnvelope(parsed)) {
     try {
-      return parseVerifiedFetchedManifest(text, originalUrl, options, now, true);
+      return parseVerifiedFetchedManifest(text, originalUrl, options, now, mode !== "demo");
     } catch (error) {
       if (mode === "permissive") {
         const message = error instanceof Error ? error.message : "Unknown signature error.";
@@ -223,7 +231,7 @@ export function parseFetchedManifestText(
     originalUrl,
     options,
     now,
-    false,
+    "unsigned",
     warnings,
   );
 }
@@ -271,7 +279,7 @@ function parseVerifiedFetchedManifest(
     manifestUrl,
     options,
     now,
-    requireSignedClaims,
+    requireSignedClaims ? "strict-signed" : "demo-signed",
   );
 }
 
@@ -299,7 +307,7 @@ function parseDemoInvalidSignedManifest(
     manifestUrl,
     options,
     now,
-    false,
+    "demo-signed",
     [
       createManifestWarning(
         manifestUrl,
@@ -315,21 +323,24 @@ function createFetchedManifestResult(
   manifestUrl: string,
   options: FetchPosemeshManifestOptions,
   now: Date,
-  requireSignedClaims: boolean,
-  warnings?: ParseWarning[],
+  claimPolicy: ManifestClaimPolicy,
+  warnings: ParseWarning[] = [],
 ): FetchedPosemeshManifest {
+  const security = validateManifestSecurityClaims(
+    manifest,
+    verification,
+    manifestUrl,
+    options,
+    now,
+    claimPolicy,
+  );
+  const allWarnings = [...warnings, ...security.warnings];
+
   return {
     manifest,
-    verification: validateManifestSecurityClaims(
-      manifest,
-      verification,
-      manifestUrl,
-      options,
-      now,
-      requireSignedClaims,
-    ),
+    verification: security.verification,
     cache: createManifestCacheMetadata(manifest, now, options),
-    ...(warnings && warnings.length > 0 ? { warnings } : {}),
+    ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
   };
 }
 
@@ -390,22 +401,65 @@ function validateManifestSecurityClaims(
   manifestUrl: string,
   options: FetchPosemeshManifestOptions,
   now: Date,
-  requireSignedClaims: boolean,
-): ManifestVerificationResult {
+  claimPolicy: ManifestClaimPolicy,
+): ManifestSecurityValidation {
+  const warnings: ParseWarning[] = [];
+  const requireSignedClaims = claimPolicy === "strict-signed";
+  const warnRelaxedSignedClaims = claimPolicy === "demo-signed";
+
   validateExpectedName(manifest, options.expectedName);
-  validateExpectedManifestUrl(manifest, options.expectedManifestUrl ?? manifestUrl, requireSignedClaims);
+  warnings.push(
+    ...validateExpectedManifestUrl(
+      manifest,
+      options.expectedManifestUrl ?? manifestUrl,
+      requireSignedClaims,
+      warnRelaxedSignedClaims,
+    ),
+  );
+  warnings.push(
+    ...validateExpectedAudience(
+      manifest,
+      options.expectedAudience,
+      requireSignedClaims,
+      warnRelaxedSignedClaims,
+      manifestUrl,
+    ),
+  );
 
   const issuedAt = validateManifestTimestamp(manifest.issuedAt, "issuedAt", requireSignedClaims);
   const expiresAt = validateManifestTimestamp(manifest.expiresAt, "expiresAt", requireSignedClaims);
+
+  if (warnRelaxedSignedClaims) {
+    if (!manifest.issuedAt) {
+      warnings.push(
+        createManifestWarning(
+          manifestUrl,
+          "demo mode accepted a signed manifest payload without issuedAt.",
+        ),
+      );
+    }
+
+    if (!manifest.expiresAt) {
+      warnings.push(
+        createManifestWarning(
+          manifestUrl,
+          "demo mode accepted a signed manifest payload without expiresAt.",
+        ),
+      );
+    }
+  }
 
   if (issuedAt && expiresAt) {
     validateManifestFreshness(issuedAt, expiresAt, now, options);
   }
 
   return {
-    ...verification,
-    ...(manifest.issuedAt ? { issuedAt: manifest.issuedAt } : {}),
-    ...(manifest.expiresAt ? { expiresAt: manifest.expiresAt } : {}),
+    verification: {
+      ...verification,
+      ...(manifest.issuedAt ? { issuedAt: manifest.issuedAt } : {}),
+      ...(manifest.expiresAt ? { expiresAt: manifest.expiresAt } : {}),
+    },
+    warnings,
   };
 }
 
@@ -512,6 +566,22 @@ function parseStringArray(value: unknown): string[] {
   });
 }
 
+function parseAudience(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (typeof value === "string") {
+    if (!value.trim()) {
+      throw new Error("Manifest audience must be a non-empty string or string array.");
+    }
+
+    return [value.trim()];
+  }
+
+  return parseStringArray(value);
+}
+
 function parsePublicKeyArray(value: unknown, field: string): string[] {
   return parseStringArray(value).map((item, index) =>
     parsePublicKey(item, `Manifest field ${field}[${index}]`),
@@ -600,7 +670,7 @@ function validateExpectedName(manifest: PosemeshManifest, expectedName: string |
     throw new Error(`Manifest sourceName is required and must match requested name ${expectedName}.`);
   }
 
-  if (normalizeName(manifest.sourceName).toLowerCase() !== normalizeName(expectedName).toLowerCase()) {
+  if (normalizeDiscoveryNameForBinding(manifest.sourceName) !== normalizeDiscoveryNameForBinding(expectedName)) {
     throw new Error(
       `Manifest sourceName ${manifest.sourceName} does not match requested name ${expectedName}.`,
     );
@@ -611,9 +681,10 @@ function validateExpectedManifestUrl(
   manifest: PosemeshManifest,
   expectedManifestUrl: string | undefined,
   requireManifestUrl: boolean,
-): void {
+  warnMissingManifestUrl: boolean,
+): ParseWarning[] {
   if (!expectedManifestUrl) {
-    return;
+    return [];
   }
 
   if (!manifest.manifestUrl) {
@@ -621,7 +692,16 @@ function validateExpectedManifestUrl(
       throw new Error("Signed manifest payload must include manifestUrl.");
     }
 
-    return;
+    if (warnMissingManifestUrl) {
+      return [
+        createManifestWarning(
+          expectedManifestUrl,
+          "demo mode accepted a signed manifest payload without manifestUrl.",
+        ),
+      ];
+    }
+
+    return [];
   }
 
   if (normalizeUrlString(manifest.manifestUrl) !== normalizeUrlString(expectedManifestUrl)) {
@@ -629,6 +709,49 @@ function validateExpectedManifestUrl(
       `Manifest manifestUrl ${manifest.manifestUrl} does not match requested URL ${expectedManifestUrl}.`,
     );
   }
+
+  return [];
+}
+
+function validateExpectedAudience(
+  manifest: PosemeshManifest,
+  expectedAudience: string | string[] | undefined,
+  requireAudience: boolean,
+  warnMissingAudience: boolean,
+  manifestUrl: string,
+): ParseWarning[] {
+  const expectedAudiences = normalizeExpectedAudiences(expectedAudience);
+
+  if (expectedAudiences.length === 0) {
+    return [];
+  }
+
+  const manifestAudiences = (manifest.audience ?? []).map(normalizeAudienceForBinding);
+
+  if (manifestAudiences.length === 0) {
+    if (requireAudience) {
+      throw new Error("Signed manifest payload must include audience.");
+    }
+
+    return warnMissingAudience
+      ? [
+          createManifestWarning(
+            manifestUrl,
+            "demo mode accepted a signed manifest payload without audience.",
+          ),
+        ]
+      : [];
+  }
+
+  const matched = expectedAudiences.some((audience) => manifestAudiences.includes(audience));
+
+  if (!matched) {
+    throw new Error(
+      `Manifest audience ${manifest.audience?.join(", ") ?? "(empty)"} does not match expected audience ${expectedAudiences.join(", ")}.`,
+    );
+  }
+
+  return [];
 }
 
 function validateManifestTimestamp(
@@ -774,7 +897,33 @@ function readOptionalNonNegativeMillisecondsOption(
 }
 
 function normalizeUrlString(value: string): string {
-  return new URL(value).toString();
+  const parsed = new URL(value);
+
+  parsed.protocol = parsed.protocol.toLowerCase();
+  parsed.hostname = normalizeHost(parsed.hostname);
+
+  if (parsed.protocol === "https:" && parsed.port === "443") {
+    parsed.port = "";
+  }
+
+  return parsed.toString();
+}
+
+function normalizeDiscoveryNameForBinding(value: string): string {
+  return normalizeName(value).toLowerCase();
+}
+
+function normalizeExpectedAudiences(value: string | string[] | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  const values = Array.isArray(value) ? value : [value];
+  return values.map(normalizeAudienceForBinding).filter(Boolean);
+}
+
+function normalizeAudienceForBinding(value: string): string {
+  return normalizeName(value).toLowerCase();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
