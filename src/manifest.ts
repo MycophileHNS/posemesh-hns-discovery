@@ -101,6 +101,8 @@ interface ManifestFetchTextResult {
   warnings?: ParseWarning[];
 }
 
+type ManifestLookupFunction = NonNullable<Parameters<ManifestHttpsRequest>[0]["lookup"]>;
+
 interface NormalizedTlsaRecord {
   certUsage: number;
   selector: number;
@@ -1720,9 +1722,7 @@ function fetchManifestTextFromAddress(
           host: url.host,
         },
         servername: isIP(normalizeHost(url.hostname)) ? undefined : url.hostname,
-        lookup: (_hostname, _options, callback) => {
-          callback(null, address.address, address.family);
-        },
+        lookup: createPinnedAddressLookup(address),
       },
       async (response) => {
         const statusCode = response.statusCode ?? 0;
@@ -1834,6 +1834,17 @@ function fetchManifestTextFromAddress(
     req.on("error", reject);
     req.end();
   });
+}
+
+function createPinnedAddressLookup(address: ManifestResolvedAddress): ManifestLookupFunction {
+  return (_hostname, options, callback) => {
+    if (options.all) {
+      callback(null, [{ address: address.address, family: address.family }]);
+      return;
+    }
+
+    callback(null, address.address, address.family);
+  };
 }
 
 function assertTlsSpkiPin(

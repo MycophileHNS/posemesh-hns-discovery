@@ -273,6 +273,10 @@ describe("Posemesh manifest parsing", () => {
     assert.deepEqual(manifest.publicKeys, ["aa".repeat(32)]);
     assert.equal(requestOptions?.hostname, "manifest.example.test");
     assert.equal(typeof requestOptions?.lookup, "function");
+    assert.ok(requestOptions);
+    assert.deepEqual(readPinnedAddresses(requestOptions), [
+      { address: "93.184.216.34", family: 4 },
+    ]);
   });
 
   it("tries all resolved manifest addresses until one succeeds", async () => {
@@ -1027,4 +1031,26 @@ function readPinnedAddress(options: RequestOptions): string {
   });
 
   return pinnedAddress;
+}
+
+function readPinnedAddresses(options: RequestOptions): Array<{ address: string; family: number }> {
+  const lookup = options.lookup;
+
+  if (typeof lookup !== "function") {
+    throw new Error("Expected pinned lookup function.");
+  }
+
+  let pinnedAddresses: Array<{ address: string; family: number }> = [];
+  lookup(String(options.hostname), { all: true }, (_error, addresses) => {
+    if (!Array.isArray(addresses)) {
+      throw new Error("Expected pinned lookup to return address objects for all=true.");
+    }
+
+    pinnedAddresses = addresses.map((address) => ({
+      address: address.address,
+      family: address.family,
+    }));
+  });
+
+  return pinnedAddresses;
 }
