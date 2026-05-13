@@ -1,10 +1,12 @@
 import { createPublicKey } from "node:crypto";
+import type { KeyObject } from "node:crypto";
 import { discoveryError } from "./observability.ts";
 import type { ManifestSignatureAlgorithm } from "./types.ts";
 
 const HEX_PUBLIC_KEY = /^(?:0x)?[0-9a-f]+$/i;
 const BASE64_PUBLIC_KEY = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const MAX_GENERIC_PUBLIC_KEY_BYTES = 1_024;
+const P256_CURVE_NAMES = new Set(["P-256", "prime256v1", "secp256r1"]);
 
 export function parsePublicKey(
   value: string,
@@ -84,8 +86,7 @@ function isP256PublicKey(bytes: Buffer): boolean {
   }
 
   try {
-    createPublicKey({ key: bytes, format: "der", type: "spki" });
-    return true;
+    return isP256KeyObject(createPublicKey({ key: bytes, format: "der", type: "spki" }));
   } catch {
     return false;
   }
@@ -93,6 +94,11 @@ function isP256PublicKey(bytes: Buffer): boolean {
 
 function isGenericKnownPublicKey(bytes: Buffer): boolean {
   return bytes.byteLength === 32 || isP256PublicKey(bytes);
+}
+
+function isP256KeyObject(key: KeyObject): boolean {
+  const namedCurve = key.asymmetricKeyDetails?.namedCurve;
+  return key.asymmetricKeyType === "ec" && !!namedCurve && P256_CURVE_NAMES.has(namedCurve);
 }
 
 function publicKeyError(message: string): Error {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { describe, it } from "node:test";
 import {
   parseAgentIdentityTxt,
@@ -83,6 +84,19 @@ describe("TXT parsing", () => {
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
     assert.match(result.warnings[0]?.message ?? "", /hex or base64/);
+  });
+
+  it("rejects RSA SPKI keys declared as ECDSA P-256 TXT keys", () => {
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const rsaSpki = publicKey.export({ format: "der", type: "spki" });
+    const result = parseTxtRecords([
+      `posemesh:v1; alg=ecdsa-p256-sha256; publicKey=${Buffer.from(rsaSpki).toString("base64url")}`,
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
+    assert.match(result.warnings[0]?.message ?? "", /P-256/);
   });
 
   it("enforces TXT parser limits", () => {

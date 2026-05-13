@@ -1,4 +1,5 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
+import type { KeyObject } from "node:crypto";
 import { discoveryError, logDebug } from "./observability.ts";
 import type {
   DiscoveryLogger,
@@ -19,6 +20,7 @@ const P256_COMPRESSED_SPKI_PREFIX = Buffer.from(
   "3039301306072a8648ce3d020106082a8648ce3d030107032200",
   "hex",
 );
+const P256_CURVE_NAMES = new Set(["P-256", "prime256v1", "secp256r1"]);
 
 export interface VerifiedManifestEnvelope {
   envelope: SignedPosemeshManifestEnvelope;
@@ -257,31 +259,61 @@ function createEd25519PublicKey(publicKey: string): ReturnType<typeof createPubl
 
 function createP256PublicKey(publicKey: string): ReturnType<typeof createPublicKey> {
   const keyBytes = decodeKeyMaterial(publicKey, "P-256 public key");
+  const spkiKey = tryCreateSpkiPublicKey(keyBytes);
 
-  try {
-    return createPublicKey({ key: keyBytes, format: "der", type: "spki" });
-  } catch {
-    if (keyBytes.byteLength === 65 && keyBytes[0] === 0x04) {
-      return createPublicKey({
+  if (spkiKey) {
+    return assertP256PublicKey(spkiKey);
+  }
+
+  if (keyBytes.byteLength === 65 && keyBytes[0] === 0x04) {
+    return assertP256PublicKey(
+      createPublicKey({
         key: Buffer.concat([P256_UNCOMPRESSED_SPKI_PREFIX, keyBytes]),
         format: "der",
         type: "spki",
-      });
-    }
+      }),
+    );
+  }
 
-    if (keyBytes.byteLength === 33 && (keyBytes[0] === 0x02 || keyBytes[0] === 0x03)) {
-      return createPublicKey({
+  if (keyBytes.byteLength === 33 && (keyBytes[0] === 0x02 || keyBytes[0] === 0x03)) {
+    return assertP256PublicKey(
+      createPublicKey({
         key: Buffer.concat([P256_COMPRESSED_SPKI_PREFIX, keyBytes]),
         format: "der",
         type: "spki",
-      });
-    }
+      }),
+    );
   }
 
   throw discoveryError(
     "MANIFEST_PUBLIC_KEY_INVALID",
     "P-256 public key must be SPKI DER, compressed, or uncompressed point bytes.",
   );
+}
+
+function tryCreateSpkiPublicKey(keyBytes: Buffer): KeyObject | undefined {
+  try {
+    return createPublicKey({ key: keyBytes, format: "der", type: "spki" });
+  } catch {
+    return undefined;
+  }
+}
+
+function assertP256PublicKey(key: KeyObject): KeyObject {
+  const namedCurve = key.asymmetricKeyDetails?.namedCurve;
+
+  if (key.asymmetricKeyType !== "ec" || !namedCurve || !P256_CURVE_NAMES.has(namedCurve)) {
+    throw discoveryError(
+      "MANIFEST_PUBLIC_KEY_INVALID",
+      "P-256 public key must be an EC public key on the P-256 curve.",
+      {
+        keyType: key.asymmetricKeyType ?? "",
+        namedCurve: namedCurve ?? "",
+      },
+    );
+  }
+
+  return key;
 }
 
 function decodeKeyMaterial(value: string, field: string): Buffer {

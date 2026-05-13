@@ -854,6 +854,47 @@ describe("Posemesh manifest parsing", () => {
 
     assert.equal(manifest.sourceName, "hq.posemesh");
   });
+
+  it("rejects RSA SPKI keys for ECDSA P-256 signed manifests", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh-rsa-as-p256.json";
+    const manifest: PosemeshManifest = {
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    };
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const payloadBytes = Buffer.from(JSON.stringify(manifest), "utf8");
+    const signature = sign("sha256", createManifestSigningBytes(payloadBytes), privateKey);
+    const rsaSpki = publicKey.export({ format: "der", type: "spki" });
+    const body = JSON.stringify({
+      version: 1,
+      payload: payloadBytes.toString("base64url"),
+      signature: signature.toString("base64url"),
+      algorithm: "ecdsa-p256-sha256",
+      keyId: "rsa-not-p256",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(body),
+          trustedKeys: [
+            {
+              id: "rsa-not-p256",
+              algorithm: "ecdsa-p256-sha256",
+              publicKey: Buffer.from(rsaSpki).toString("base64url"),
+              source: "trusted",
+            },
+          ],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /Manifest signature verification failed/,
+    );
+  });
 });
 
 function createSignedManifestBody(
