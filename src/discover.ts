@@ -5,6 +5,8 @@ import { DnsResolver } from "./resolvers.ts";
 import type {
   DiscoverPosemeshOptions,
   FetchPosemeshManifestOptions,
+  ManifestCacheMetadata,
+  ManifestDaneMetadata,
   ManifestVerificationKey,
   ManifestVerificationResult,
   NormalizedDiscoveryResult,
@@ -32,6 +34,8 @@ export async function discoverPosemesh(
   );
   let manifest: PosemeshManifest | undefined;
   let manifestVerification: ManifestVerificationResult | undefined;
+  let manifestCache: ManifestCacheMetadata | undefined;
+  let manifestDane: ManifestDaneMetadata | undefined;
 
   if (manifestUrl && shouldFetchManifest) {
     try {
@@ -44,6 +48,8 @@ export async function discoverPosemesh(
         );
         manifest = fetched.manifest;
         manifestVerification = fetched.verification;
+        manifestCache = fetched.cache;
+        manifestDane = fetched.dane;
         warnings.push(...(fetched.warnings ?? []));
       }
 
@@ -53,6 +59,8 @@ export async function discoverPosemesh(
         warnings.push(identityWarning);
         manifest = undefined;
         manifestVerification = undefined;
+        manifestCache = undefined;
+        manifestDane = undefined;
       }
     } catch (error) {
       warnings.push({
@@ -71,6 +79,8 @@ export async function discoverPosemesh(
     ...(manifest ? { manifest } : {}),
     ...(manifestUrl ? { manifestUrl } : {}),
     ...(manifestVerification ? { manifestVerification } : {}),
+    ...(manifestCache ? { manifestCache } : {}),
+    ...(manifestDane ? { manifestDane } : {}),
   });
 }
 
@@ -81,6 +91,8 @@ interface NormalizeInput {
   manifest?: PosemeshManifest;
   manifestUrl?: string;
   manifestVerification?: ManifestVerificationResult;
+  manifestCache?: ManifestCacheMetadata;
+  manifestDane?: ManifestDaneMetadata;
   resolvedAt: string;
 }
 
@@ -116,6 +128,8 @@ function normalizeDiscoveryResult(input: NormalizeInput): NormalizedDiscoveryRes
     ...(input.manifest?.healthCheck ? { healthCheck: input.manifest.healthCheck } : {}),
     ...(input.manifestUrl ? { manifestUrl: input.manifestUrl } : {}),
     ...(input.manifestVerification ? { manifestVerification: input.manifestVerification } : {}),
+    ...(input.manifestCache ? { manifestCache: input.manifestCache } : {}),
+    ...(input.manifestDane ? { manifestDane: input.manifestDane } : {}),
     agentEndpoints: uniqueStrings(agentEndpoints),
     resolvedAt: input.resolvedAt,
     warnings: input.warnings,

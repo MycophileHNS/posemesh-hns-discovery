@@ -1,4 +1,5 @@
-import { lookup } from "node:dns/promises";
+import { lookup, resolveTlsa } from "node:dns/promises";
+import { createHash, X509Certificate } from "node:crypto";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { TextDecoder } from "node:util";
@@ -10,10 +11,14 @@ import type {
   DomainManager,
   FetchPosemeshManifestOptions,
   FetchedPosemeshManifest,
+  ManifestCacheMetadata,
+  ManifestDaneMetadata,
   ManifestHostResolver,
   ManifestHttpsRequest,
   ManifestResolvedAddress,
   ManifestSecurityMode,
+  ManifestTlsaRecord,
+  ManifestTlsaResolver,
   ManifestVerificationResult,
   ParseWarning,
   PathfindingService,
@@ -32,12 +37,52 @@ const DEFAULT_MANIFEST_SECURITY_MODE: ManifestSecurityMode = "strict";
 const DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_MANIFEST_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 
+interface ManifestFetchPolicy {
+  timeoutMs: number;
+  maxBytes: number;
+  httpsRequest: ManifestHttpsRequest;
+  tlsPins?: Record<string, string[]>;
+  enableDane: boolean;
+  requireTlsa: boolean;
+  resolveTlsa: ManifestTlsaResolver;
+  securityMode: ManifestSecurityMode;
+  checkedAt: Date;
+  allowMissingContentType: boolean;
+}
+
+interface ManifestFetchTextResult {
+  text: string;
+  dane?: ManifestDaneMetadata;
+  warnings?: ParseWarning[];
+}
+
+interface NormalizedTlsaRecord {
+  certUsage: number;
+  selector: number;
+  matchingType: number;
+  certificateAssociationData: Buffer;
+}
+
+interface PeerCertificate {
+  raw?: Buffer;
+  pubkey?: Buffer;
+  issuerCertificate?: PeerCertificate;
+}
+
+interface ClassifiedManifestAddress extends ManifestResolvedAddress {
+  unsafeReason?: string;
+}
+
 const defaultManifestHostResolver: ManifestHostResolver = async (hostname) => {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
   return addresses.map(({ address, family }) => ({
     address,
     family: family === 6 ? 6 : 4,
   }));
+};
+
+const defaultManifestTlsaResolver: ManifestTlsaResolver = async (hostname, port) => {
+  return resolveTlsa(createTlsaRecordName(hostname, port));
 };
 
 export async function fetchPosemeshManifest(
@@ -62,14 +107,29 @@ export async function fetchPosemeshManifestWithVerification(
   );
 
   const maxBytes = options.maxBytes ?? DEFAULT_MANIFEST_MAX_BYTES;
-  const text = await fetchManifestText(
+  const fetchResult = await fetchManifestText(
     manifestUrl.url,
     manifestUrl.addresses,
-    options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
-    maxBytes,
-    options.httpsRequest ?? (request as ManifestHttpsRequest),
+    {
+      timeoutMs: options.timeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS,
+      maxBytes,
+      httpsRequest: options.httpsRequest ?? (request as ManifestHttpsRequest),
+      allowMissingContentType: options.allowMissingContentType ?? false,
+      ...(options.tlsPins ? { tlsPins: options.tlsPins } : {}),
+      enableDane: options.enableDane ?? false,
+      requireTlsa: options.requireTlsa ?? false,
+      resolveTlsa: options.resolveTlsa ?? defaultManifestTlsaResolver,
+      securityMode: options.securityMode ?? DEFAULT_MANIFEST_SECURITY_MODE,
+      checkedAt: (options.now ?? (() => new Date()))(),
+    },
   );
-  return parseFetchedManifestText(text, url, options);
+  const parsed = parseFetchedManifestText(fetchResult.text, url, options);
+
+  return {
+    ...parsed,
+    ...(fetchResult.dane ? { dane: fetchResult.dane } : {}),
+    warnings: [...(fetchResult.warnings ?? []), ...(parsed.warnings ?? [])],
+  };
 }
 
 export function parsePosemeshManifest(value: unknown): PosemeshManifest {
@@ -147,7 +207,14 @@ export function parseFetchedManifestText(
   }
 
   const unsignedManifest = parsePosemeshManifest(parsed);
-  const verification = validateManifestSecurityClaims(
+  const warnings = [
+    createManifestWarning(
+      originalUrl,
+      `${mode} mode accepted an unsigned manifest. Strict mode requires a signed manifest envelope.`,
+    ),
+  ];
+
+  return createFetchedManifestResult(
     unsignedManifest,
     {
       status: "unsigned-allowed",
@@ -157,15 +224,8 @@ export function parseFetchedManifestText(
     options,
     now,
     false,
+    warnings,
   );
-  const warnings = [
-    createManifestWarning(
-      originalUrl,
-      `${mode} mode accepted an unsigned manifest. Strict mode requires a signed manifest envelope.`,
-    ),
-  ];
-
-  return { manifest: unsignedManifest, verification, warnings };
 }
 
 function parseStrictFetchedManifest(
@@ -204,7 +264,8 @@ function parseVerifiedFetchedManifest(
 
   const verifiedEnvelope = verifySignedManifestEnvelopeText(text, trustedKeys, now);
   const manifest = parsePosemeshManifest(JSON.parse(verifiedEnvelope.payloadText) as unknown);
-  const verification = validateManifestSecurityClaims(
+
+  return createFetchedManifestResult(
     manifest,
     verifiedEnvelope.verification,
     manifestUrl,
@@ -212,8 +273,6 @@ function parseVerifiedFetchedManifest(
     now,
     requireSignedClaims,
   );
-
-  return { manifest, verification };
 }
 
 function parseDemoInvalidSignedManifest(
@@ -226,7 +285,10 @@ function parseDemoInvalidSignedManifest(
   const payloadText = decodeEnvelopePayloadText(parsed);
   const manifest = parsePosemeshManifest(JSON.parse(payloadText) as unknown);
   const envelopeMetadata = readEnvelopeMetadata(parsed);
-  const verification = validateManifestSecurityClaims(
+  const message =
+    verificationError instanceof Error ? verificationError.message : "Unknown signature error.";
+
+  return createFetchedManifestResult(
     manifest,
     {
       status: "invalid-allowed",
@@ -238,19 +300,36 @@ function parseDemoInvalidSignedManifest(
     options,
     now,
     false,
-  );
-  const message =
-    verificationError instanceof Error ? verificationError.message : "Unknown signature error.";
-
-  return {
-    manifest,
-    verification,
-    warnings: [
+    [
       createManifestWarning(
         manifestUrl,
         `demo mode accepted a manifest with invalid signature verification: ${message}`,
       ),
     ],
+  );
+}
+
+function createFetchedManifestResult(
+  manifest: PosemeshManifest,
+  verification: ManifestVerificationResult,
+  manifestUrl: string,
+  options: FetchPosemeshManifestOptions,
+  now: Date,
+  requireSignedClaims: boolean,
+  warnings?: ParseWarning[],
+): FetchedPosemeshManifest {
+  return {
+    manifest,
+    verification: validateManifestSecurityClaims(
+      manifest,
+      verification,
+      manifestUrl,
+      options,
+      now,
+      requireSignedClaims,
+    ),
+    cache: createManifestCacheMetadata(manifest, now, options),
+    ...(warnings && warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -580,9 +659,20 @@ function validateManifestFreshness(
   now: Date,
   options: FetchPosemeshManifestOptions,
 ): void {
-  const maxClockSkewMs = options.maxClockSkewMs ?? DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS;
-  const maxManifestTtlMs = options.maxManifestTtlMs ?? DEFAULT_MANIFEST_MAX_TTL_MS;
+  const maxClockSkewMs = readNonNegativeMillisecondsOption(
+    options.maxClockSkewMs ?? DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS,
+    "maxClockSkewMs",
+  );
+  const maxManifestTtlMs = readNonNegativeMillisecondsOption(
+    options.maxManifestTtlMs ?? DEFAULT_MANIFEST_MAX_TTL_MS,
+    "maxManifestTtlMs",
+  );
+  const maxManifestAgeMs = readOptionalNonNegativeMillisecondsOption(
+    options.maxManifestAgeMs,
+    "maxManifestAgeMs",
+  );
   const ttlMs = expiresAt.getTime() - issuedAt.getTime();
+  const ageMs = now.getTime() - issuedAt.getTime();
 
   if (ttlMs <= 0) {
     throw new Error("Manifest expiresAt must be after issuedAt.");
@@ -596,9 +686,91 @@ function validateManifestFreshness(
     throw new Error("Manifest is not valid yet.");
   }
 
+  if (maxManifestAgeMs !== undefined && ageMs > maxManifestAgeMs) {
+    throw new Error(`Manifest age must not exceed ${maxManifestAgeMs}ms.`);
+  }
+
   if (expiresAt.getTime() + maxClockSkewMs < now.getTime()) {
     throw new Error("Manifest has expired.");
   }
+}
+
+function createManifestCacheMetadata(
+  manifest: PosemeshManifest,
+  now: Date,
+  options: FetchPosemeshManifestOptions,
+): ManifestCacheMetadata {
+  const issuedAt = parseCacheTimestamp(manifest.issuedAt);
+  const expiresAt = parseCacheTimestamp(manifest.expiresAt);
+  const maxManifestAgeMs = readOptionalNonNegativeMillisecondsOption(
+    options.maxManifestAgeMs,
+    "maxManifestAgeMs",
+  );
+  const ageMs = issuedAt ? Math.max(0, now.getTime() - issuedAt.getTime()) : undefined;
+  const base = {
+    checkedAt: now.toISOString(),
+    ...(manifest.issuedAt ? { issuedAt: manifest.issuedAt } : {}),
+    ...(manifest.expiresAt ? { expiresAt: manifest.expiresAt } : {}),
+    ...(ageMs !== undefined ? { ageMs } : {}),
+    ...(maxManifestAgeMs !== undefined ? { maxManifestAgeMs } : {}),
+  };
+
+  if (!expiresAt) {
+    return {
+      cacheStatus: "uncacheable",
+      ...base,
+      reason: "Manifest does not include expiresAt.",
+    };
+  }
+
+  if (expiresAt.getTime() <= now.getTime()) {
+    return {
+      cacheStatus: "stale",
+      ...base,
+      reason: "Manifest expiresAt is not in the future.",
+    };
+  }
+
+  if (maxManifestAgeMs !== undefined && ageMs !== undefined && ageMs > maxManifestAgeMs) {
+    return {
+      cacheStatus: "stale",
+      ...base,
+      reason: "Manifest age exceeds maxManifestAgeMs.",
+    };
+  }
+
+  return {
+    cacheStatus: "fresh",
+    ...base,
+  };
+}
+
+function parseCacheTimestamp(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value ? parsed : undefined;
+}
+
+function readNonNegativeMillisecondsOption(value: number, field: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative finite number.`);
+  }
+
+  return value;
+}
+
+function readOptionalNonNegativeMillisecondsOption(
+  value: number | undefined,
+  field: string,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return readNonNegativeMillisecondsOption(value, field);
 }
 
 function normalizeUrlString(value: string): string {
@@ -660,9 +832,12 @@ async function assertPublicManifestHost(
 ): Promise<ManifestResolvedAddress[]> {
   // Resolve first, then reject the whole manifest URL if any returned address is unsafe.
   const host = normalizeHost(hostname);
+  const unsafeLiteralReason = getUnsafeManifestHostReason(host);
 
-  if (isLocalOrPrivateHost(host)) {
-    throw new Error("Manifest URL must not use localhost, private, or reserved network addresses.");
+  if (unsafeLiteralReason) {
+    throw new Error(
+      `Manifest URL must not use localhost, private, or reserved network addresses (${unsafeLiteralReason}).`,
+    );
   }
 
   const ipVersion = isIP(host);
@@ -684,7 +859,7 @@ async function assertPublicManifestHost(
     throw new Error(`Manifest host lookup returned no addresses for ${host}.`);
   }
 
-  const normalizedAddresses = addresses.map(({ address }) => {
+  const normalizedAddresses: ClassifiedManifestAddress[] = addresses.map(({ address }) => {
     const normalizedAddress = normalizeHost(address);
     const resolvedFamily = isIP(normalizedAddress);
 
@@ -692,16 +867,32 @@ async function assertPublicManifestHost(
       throw new Error(`Manifest host ${host} resolves to an invalid IP address.`);
     }
 
+    const unsafeReason = getUnsafeManifestHostReason(normalizedAddress);
+
     return {
       address: normalizedAddress,
       family: resolvedFamily === 6 ? 6 : 4,
-    } satisfies ManifestResolvedAddress;
+      ...(unsafeReason ? { unsafeReason } : {}),
+    } satisfies ClassifiedManifestAddress;
   });
 
-  const blockedAddress = normalizedAddresses.find(({ address }) => isLocalOrPrivateHost(address));
+  const blockedAddresses = normalizedAddresses.filter(({ unsafeReason }) => unsafeReason);
+  const publicAddresses = normalizedAddresses.filter(({ unsafeReason }) => !unsafeReason);
 
-  if (blockedAddress) {
-    throw new Error(`Manifest host ${host} resolves to a localhost, private, or reserved network address.`);
+  if (blockedAddresses.length > 0) {
+    const blockedSummary = blockedAddresses
+      .map(({ address, unsafeReason }) => `${address} (${unsafeReason ?? "non-public"})`)
+      .join(", ");
+
+    if (publicAddresses.length > 0) {
+      throw new Error(
+        `Manifest host ${host} resolves to mixed public/private or reserved network addresses: ${blockedSummary}.`,
+      );
+    }
+
+    throw new Error(
+      `Manifest host ${host} resolves to localhost, private, or reserved network addresses: ${blockedSummary}.`,
+    );
   }
 
   return normalizedAddresses;
@@ -712,41 +903,76 @@ function normalizeHost(hostname: string): string {
 }
 
 function isLocalOrPrivateHost(hostname: string): boolean {
+  return getUnsafeManifestHostReason(hostname) !== undefined;
+}
+
+function getUnsafeManifestHostReason(hostname: string): string | undefined {
   const host = normalizeHost(hostname);
 
   if (host === "localhost" || host.endsWith(".localhost")) {
-    return true;
+    return "localhost hostname";
   }
 
   const ipVersion = isIP(host);
 
   if (ipVersion === 4) {
-    return isPrivateIpv4(host);
+    return isPrivateIpv4(host) ? "non-public IPv4 address" : undefined;
   }
 
   if (ipVersion === 6) {
-    return isPrivateIpv6(host);
+    const mappedIpv4 = parseIpv4MappedIpv6(host);
+
+    if (mappedIpv4) {
+      return `IPv4-mapped IPv6 address ${mappedIpv4}`;
+    }
+
+    return isPrivateIpv6(host) ? "non-public IPv6 address" : undefined;
   }
 
-  return false;
+  return undefined;
 }
 
-function isPrivateIpv4(host: string): boolean {
-  const [first = 0, second = 0, third = 0] = host.split(".").map((part) => Number(part));
+const BLOCKED_IPV4_RANGES: Array<[string, number]> = [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+];
 
-  return (
-    first === 0 ||
-    first === 10 ||
-    (first === 100 && second >= 64 && second <= 127) ||
-    first === 127 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 0 && (third === 0 || third === 2)) ||
-    (first === 192 && second === 168) ||
-    (first === 198 && (second === 18 || second === 19)) ||
-    (first === 198 && second === 51 && third === 100) ||
-    (first === 203 && second === 0 && third === 113) ||
-    first >= 224
+const BLOCKED_IPV6_RANGES: Array<[string, number]> = [
+  ["::", 96],
+  ["::", 128],
+  ["::1", 128],
+  ["::ffff:0:0", 96],
+  ["64:ff9b::", 96],
+  ["64:ff9b:1::", 48],
+  ["100::", 64],
+  ["2001::", 32],
+  ["2001:2::", 48],
+  ["2001:10::", 28],
+  ["2001:20::", 28],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["3fff::", 20],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+];
+
+function isPrivateIpv4(host: string): boolean {
+  return BLOCKED_IPV4_RANGES.some(([base, prefixLength]) =>
+    isIpv4InRange(host, base, prefixLength),
   );
 }
 
@@ -754,19 +980,11 @@ function isPrivateIpv6(host: string): boolean {
   const mappedIpv4 = parseIpv4MappedIpv6(host);
 
   if (mappedIpv4) {
-    return isPrivateIpv4(mappedIpv4);
+    return true;
   }
 
-  return (
-    host === "::" ||
-    host === "::1" ||
-    host.startsWith("fc") ||
-    host.startsWith("fd") ||
-    host.startsWith("fe8") ||
-    host.startsWith("fe9") ||
-    host.startsWith("fea") ||
-    host.startsWith("feb") ||
-    host.startsWith("2001:db8")
+  return BLOCKED_IPV6_RANGES.some(([base, prefixLength]) =>
+    isIpv6InRange(host, base, prefixLength),
   );
 }
 
@@ -789,29 +1007,117 @@ function parseIpv4MappedIpv6(host: string): string | undefined {
   return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
 }
 
+function isIpv4InRange(host: string, base: string, prefixLength: number): boolean {
+  const hostValue = ipv4ToNumber(host);
+  const baseValue = ipv4ToNumber(base);
+  const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+
+  return (hostValue & mask) === (baseValue & mask);
+}
+
+function ipv4ToNumber(host: string): number {
+  return host.split(".").reduce((value, part) => (value << 8) + Number(part), 0) >>> 0;
+}
+
+function isIpv6InRange(host: string, base: string, prefixLength: number): boolean {
+  const hostValue = ipv6ToBigInt(host);
+  const baseValue = ipv6ToBigInt(base);
+  const shift = BigInt(128 - prefixLength);
+
+  return (hostValue >> shift) === (baseValue >> shift);
+}
+
+function ipv6ToBigInt(host: string): bigint {
+  const expanded = expandIpv6Address(host);
+
+  return expanded.reduce((value, part) => (value << 16n) + BigInt(part), 0n);
+}
+
+function expandIpv6Address(host: string): number[] {
+  const normalized = normalizeEmbeddedIpv4InIpv6(host);
+  const [head = "", tail = "", extra] = normalized.split("::");
+
+  if (extra !== undefined) {
+    throw new Error(`Invalid IPv6 address: ${host}`);
+  }
+
+  const headParts = splitIpv6Parts(head);
+  const tailParts = splitIpv6Parts(tail);
+  const zeroCount = 8 - headParts.length - tailParts.length;
+
+  if (zeroCount < 0 || (normalized.includes("::") && zeroCount < 1)) {
+    throw new Error(`Invalid IPv6 address: ${host}`);
+  }
+
+  const zeroParts = Array.from({ length: normalized.includes("::") ? zeroCount : 0 }, () => 0);
+  const parts = [...headParts, ...zeroParts, ...tailParts];
+
+  if (parts.length !== 8) {
+    throw new Error(`Invalid IPv6 address: ${host}`);
+  }
+
+  return parts;
+}
+
+function normalizeEmbeddedIpv4InIpv6(host: string): string {
+  if (!host.includes(".")) {
+    return host;
+  }
+
+  const lastColon = host.lastIndexOf(":");
+  const ipv4 = host.slice(lastColon + 1);
+
+  if (isIP(ipv4) !== 4) {
+    return host;
+  }
+
+  const octets = ipv4.split(".").map((part) => Number(part)) as [
+    number,
+    number,
+    number,
+    number,
+  ];
+  const high = (octets[0] << 8) + octets[1];
+  const low = (octets[2] << 8) + octets[3];
+
+  return `${host.slice(0, lastColon)}:${high.toString(16)}:${low.toString(16)}`;
+}
+
+function splitIpv6Parts(value: string): number[] {
+  if (!value) {
+    return [];
+  }
+
+  return value.split(":").map((part) => {
+    const parsed = Number.parseInt(part, 16);
+
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 0xffff) {
+      throw new Error(`Invalid IPv6 segment: ${part}`);
+    }
+
+    return parsed;
+  });
+}
+
 function fetchManifestText(
   url: URL,
   addresses: ManifestResolvedAddress[],
-  timeoutMs: number,
-  maxBytes: number,
-  httpsRequest: ManifestHttpsRequest,
-): Promise<string> {
-  return tryManifestAddresses(url, addresses, timeoutMs, maxBytes, httpsRequest);
+  policy: ManifestFetchPolicy,
+): Promise<ManifestFetchTextResult> {
+  return tryManifestAddresses(url, addresses, policy);
 }
 
 async function tryManifestAddresses(
   url: URL,
   addresses: ManifestResolvedAddress[],
-  timeoutMs: number,
-  maxBytes: number,
-  httpsRequest: ManifestHttpsRequest,
-): Promise<string> {
+  policy: ManifestFetchPolicy,
+): Promise<ManifestFetchTextResult> {
   // Try resolved addresses one at a time so a dead address does not fail the whole manifest.
   const errors: string[] = [];
 
   for (const address of addresses) {
     try {
-      return await fetchManifestTextFromAddress(url, address, timeoutMs, maxBytes, httpsRequest);
+      return await fetchManifestTextFromAddress(url, address, policy);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown manifest fetch error.";
       errors.push(`${address.address}: ${message}`);
@@ -826,16 +1132,16 @@ async function tryManifestAddresses(
 function fetchManifestTextFromAddress(
   url: URL,
   address: ManifestResolvedAddress,
-  timeoutMs: number,
-  maxBytes: number,
-  httpsRequest: ManifestHttpsRequest,
-): Promise<string> {
+  policy: ManifestFetchPolicy,
+): Promise<ManifestFetchTextResult> {
   return new Promise((resolve, reject) => {
     const chunks: Uint8Array[] = [];
     const decoder = new TextDecoder();
     let bytesRead = 0;
+    let dane: ManifestDaneMetadata | undefined;
+    let daneWarnings: ParseWarning[] = [];
 
-    const req = httpsRequest(
+    const req = policy.httpsRequest(
       {
         protocol: url.protocol,
         hostname: url.hostname,
@@ -851,7 +1157,7 @@ function fetchManifestTextFromAddress(
           callback(null, address.address, address.family);
         },
       },
-      (response) => {
+      async (response) => {
         const statusCode = response.statusCode ?? 0;
 
         if (statusCode >= 300 && statusCode < 400) {
@@ -866,10 +1172,21 @@ function fetchManifestTextFromAddress(
           return;
         }
 
+        try {
+          assertTlsSpkiPin(url, response, policy.tlsPins);
+          const daneResult = await validateManifestDane(url, response, policy);
+          dane = daneResult.dane;
+          daneWarnings = daneResult.warnings;
+        } catch (error) {
+          response.resume();
+          reject(error);
+          return;
+        }
+
         const contentType = response.headers["content-type"];
         const declaredContentType = Array.isArray(contentType) ? contentType[0] : contentType;
 
-        if (!isJsonContentType(declaredContentType)) {
+        if (!isAllowedJsonContentType(declaredContentType, policy.allowMissingContentType)) {
           response.resume();
           reject(
             new Error(
@@ -882,17 +1199,17 @@ function fetchManifestTextFromAddress(
         const contentLength = response.headers["content-length"];
         const declaredLength = Array.isArray(contentLength) ? contentLength[0] : contentLength;
 
-        if (declaredLength && Number(declaredLength) > maxBytes) {
+        if (declaredLength && Number(declaredLength) > policy.maxBytes) {
           response.resume();
-          reject(new Error(`Manifest response is larger than ${maxBytes} bytes.`));
+          reject(new Error(`Manifest response is larger than ${policy.maxBytes} bytes.`));
           return;
         }
 
         response.on("data", (chunk: Uint8Array) => {
           bytesRead += chunk.byteLength;
 
-          if (bytesRead > maxBytes) {
-            req.destroy(new Error(`Manifest response is larger than ${maxBytes} bytes.`));
+          if (bytesRead > policy.maxBytes) {
+            req.destroy(new Error(`Manifest response is larger than ${policy.maxBytes} bytes.`));
             return;
           }
 
@@ -900,15 +1217,19 @@ function fetchManifestTextFromAddress(
         });
 
         response.on("end", () => {
-          resolve(decoder.decode(Buffer.concat(chunks)));
+          resolve({
+            text: decoder.decode(Buffer.concat(chunks)),
+            ...(dane ? { dane } : {}),
+            ...(daneWarnings.length > 0 ? { warnings: daneWarnings } : {}),
+          });
         });
 
         response.on("error", reject);
       },
     );
 
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Manifest fetch timed out after ${timeoutMs}ms.`));
+    req.setTimeout(policy.timeoutMs, () => {
+      req.destroy(new Error(`Manifest fetch timed out after ${policy.timeoutMs}ms.`));
     });
 
     req.on("error", reject);
@@ -916,9 +1237,332 @@ function fetchManifestTextFromAddress(
   });
 }
 
-function isJsonContentType(contentType: string | undefined): boolean {
-  if (!contentType) {
+function assertTlsSpkiPin(
+  url: URL,
+  response: { socket?: unknown },
+  tlsPins: Record<string, string[]> | undefined,
+): void {
+  const pins = findTlsPinsForHostname(url.hostname, tlsPins);
+
+  if (pins.length === 0) {
+    return;
+  }
+
+  const actualPin = readResponseSpkiSha256(response);
+  const normalizedPins = pins.map(normalizeSpkiPin);
+
+  if (!normalizedPins.includes(actualPin)) {
+    throw new Error(`TLS SPKI pin mismatch for ${normalizeHost(url.hostname)}.`);
+  }
+}
+
+async function validateManifestDane(
+  url: URL,
+  response: { socket?: unknown },
+  policy: ManifestFetchPolicy,
+): Promise<{ dane?: ManifestDaneMetadata; warnings: ParseWarning[] }> {
+  if (!policy.enableDane && !policy.requireTlsa) {
+    return { warnings: [] };
+  }
+
+  const host = normalizeHost(url.hostname);
+  const port = Number(url.port || 443);
+  const recordName = createTlsaRecordName(host, port);
+  const base = {
+    checkedAt: policy.checkedAt.toISOString(),
+    host,
+    port,
+    recordName,
+  };
+  let records: ManifestTlsaRecord[];
+
+  try {
+    records = await policy.resolveTlsa(host, port);
+  } catch (error) {
+    if (isDnsNoRecordsError(error)) {
+      return handleMissingTlsaRecords(url, policy, {
+        ...base,
+        status: "no-records",
+        recordCount: 0,
+      });
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown TLSA lookup error.";
+    const dane = {
+      ...base,
+      status: "failed" as const,
+      recordCount: 0,
+      error: `TLSA lookup failed: ${message}`,
+    };
+
+    if (policy.requireTlsa) {
+      throw new Error(dane.error);
+    }
+
+    return {
+      dane,
+      warnings: [createManifestWarning(url.toString(), `${dane.error}; falling back to normal TLS validation.`)],
+    };
+  }
+
+  if (records.length === 0) {
+    return handleMissingTlsaRecords(url, policy, {
+      ...base,
+      status: "no-records",
+      recordCount: 0,
+    });
+  }
+
+  const normalizedRecords = records.map(normalizeTlsaRecord);
+  const peerCertificates = readPeerCertificateChain(response);
+  const matchedRecord = findMatchingTlsaRecord(normalizedRecords, peerCertificates);
+
+  if (!matchedRecord) {
+    const dane = {
+      ...base,
+      status: "failed" as const,
+      recordCount: records.length,
+      error: "Presented TLS certificate did not match any TLSA record.",
+    };
+
+    throw new Error(dane.error);
+  }
+
+  return {
+    dane: {
+      ...base,
+      status: "validated",
+      recordCount: records.length,
+      matchedRecord: {
+        certUsage: matchedRecord.certUsage,
+        selector: matchedRecord.selector,
+        matchingType: matchedRecord.matchingType,
+      },
+    },
+    warnings: [],
+  };
+}
+
+function handleMissingTlsaRecords(
+  url: URL,
+  policy: ManifestFetchPolicy,
+  dane: ManifestDaneMetadata,
+): { dane: ManifestDaneMetadata; warnings: ParseWarning[] } {
+  const message = `No TLSA records found for ${dane.recordName}; falling back to normal TLS validation.`;
+
+  if (policy.requireTlsa) {
+    throw new Error(`TLSA records are required for ${normalizeHost(url.hostname)} but none were found.`);
+  }
+
+  return {
+    dane,
+    warnings: [createManifestWarning(url.toString(), message)],
+  };
+}
+
+function createTlsaRecordName(hostname: string, port: number): string {
+  return `_${port}._tcp.${normalizeHost(hostname)}`;
+}
+
+function normalizeTlsaRecord(record: ManifestTlsaRecord): NormalizedTlsaRecord {
+  const matchingType = record.matchingType ?? record.match;
+  const data = record.certificateAssociationData ?? record.data;
+
+  if (!Number.isInteger(record.certUsage) || record.certUsage < 0 || record.certUsage > 3) {
+    throw new Error("TLSA certUsage must be 0, 1, 2, or 3.");
+  }
+
+  if (record.selector !== 0 && record.selector !== 1) {
+    throw new Error("TLSA selector must be 0 or 1.");
+  }
+
+  if (matchingType !== 0 && matchingType !== 1 && matchingType !== 2) {
+    throw new Error("TLSA matching type must be 0, 1, or 2.");
+  }
+
+  if (data === undefined) {
+    throw new Error("TLSA record is missing certificate association data.");
+  }
+
+  return {
+    certUsage: record.certUsage,
+    selector: record.selector,
+    matchingType,
+    certificateAssociationData: decodeTlsaAssociationData(data),
+  };
+}
+
+function decodeTlsaAssociationData(value: string | ArrayBuffer | Uint8Array): Buffer {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const hex = trimmed.replace(/^0x/i, "");
+
+    if (/^[0-9a-f]+$/i.test(hex) && hex.length % 2 === 0) {
+      return Buffer.from(hex, "hex");
+    }
+
+    if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(trimmed)) {
+      throw new Error("TLSA certificate association data must be hex, base64, or base64url.");
+    }
+
+    const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return Buffer.from(padded, "base64");
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+
+  return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+}
+
+function readPeerCertificateChain(response: { socket?: unknown }): PeerCertificate[] {
+  const socket = response.socket as
+    | { getPeerCertificate?: (detailed?: boolean) => PeerCertificate | null }
+    | undefined;
+  const leaf = socket?.getPeerCertificate?.(true);
+
+  if (!leaf) {
+    throw new Error("TLSA validation is configured, but the peer certificate was unavailable.");
+  }
+
+  const certificates: PeerCertificate[] = [];
+  const seen = new Set<string>();
+  let current: PeerCertificate | undefined = leaf;
+
+  while (current?.raw) {
+    const fingerprint = current.raw.toString("base64");
+
+    if (seen.has(fingerprint)) {
+      break;
+    }
+
+    certificates.push(current);
+    seen.add(fingerprint);
+
+    if (!current.issuerCertificate || current.issuerCertificate === current) {
+      break;
+    }
+
+    current = current.issuerCertificate;
+  }
+
+  if (certificates.length === 0) {
+    certificates.push(leaf);
+  }
+
+  return certificates;
+}
+
+function findMatchingTlsaRecord(
+  records: NormalizedTlsaRecord[],
+  certificates: PeerCertificate[],
+): NormalizedTlsaRecord | undefined {
+  return records.find((record) => {
+    const candidateCertificates =
+      record.certUsage === 0 || record.certUsage === 2 ? certificates : certificates.slice(0, 1);
+
+    return candidateCertificates.some((certificate) => doesTlsaRecordMatchCertificate(record, certificate));
+  });
+}
+
+function doesTlsaRecordMatchCertificate(
+  record: NormalizedTlsaRecord,
+  certificate: PeerCertificate,
+): boolean {
+  const selected = selectTlsaCertificateBytes(certificate, record.selector);
+  const matched = applyTlsaMatchingType(selected, record.matchingType);
+
+  return matched.equals(record.certificateAssociationData);
+}
+
+function selectTlsaCertificateBytes(certificate: PeerCertificate, selector: number): Buffer {
+  if (selector === 0) {
+    if (!Buffer.isBuffer(certificate.raw)) {
+      throw new Error("TLSA selector 0 requires raw certificate bytes.");
+    }
+
+    return certificate.raw;
+  }
+
+  if (Buffer.isBuffer(certificate.raw)) {
+    const x509 = new X509Certificate(certificate.raw);
+    return Buffer.from(x509.publicKey.export({ format: "der", type: "spki" }));
+  }
+
+  if (Buffer.isBuffer(certificate.pubkey)) {
+    return certificate.pubkey;
+  }
+
+  throw new Error("TLSA selector 1 requires certificate public key bytes.");
+}
+
+function applyTlsaMatchingType(value: Buffer, matchingType: number): Buffer {
+  if (matchingType === 0) {
+    return value;
+  }
+
+  if (matchingType === 1) {
+    return createHash("sha256").update(value).digest();
+  }
+
+  return createHash("sha512").update(value).digest();
+}
+
+function isDnsNoRecordsError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
     return false;
+  }
+
+  const code = "code" in error ? String(error.code) : "";
+  return code === "ENODATA" || code === "ENOTFOUND" || code === "NOTFOUND";
+}
+
+function findTlsPinsForHostname(
+  hostname: string,
+  tlsPins: Record<string, string[]> | undefined,
+): string[] {
+  if (!tlsPins) {
+    return [];
+  }
+
+  return tlsPins[normalizeHost(hostname)] ?? [];
+}
+
+function readResponseSpkiSha256(response: { socket?: unknown }): string {
+  const socket = response.socket as
+    | { getPeerCertificate?: (detailed?: boolean) => { raw?: Buffer; pubkey?: Buffer } | null }
+    | undefined;
+  const certificate = socket?.getPeerCertificate?.(true);
+
+  if (!certificate) {
+    throw new Error("TLS SPKI pinning is configured, but the peer certificate was unavailable.");
+  }
+
+  if (Buffer.isBuffer(certificate.raw)) {
+    const x509 = new X509Certificate(certificate.raw);
+    const spki = x509.publicKey.export({ format: "der", type: "spki" });
+    return createHash("sha256").update(spki).digest("base64");
+  }
+
+  if (Buffer.isBuffer(certificate.pubkey)) {
+    return createHash("sha256").update(certificate.pubkey).digest("base64");
+  }
+
+  throw new Error("TLS SPKI pinning is configured, but no public key material was available.");
+}
+
+function normalizeSpkiPin(pin: string): string {
+  return pin.trim().replace(/^sha256\//i, "");
+}
+
+function isAllowedJsonContentType(
+  contentType: string | undefined,
+  allowMissingContentType: boolean,
+): boolean {
+  if (!contentType) {
+    return allowMissingContentType;
   }
 
   const [mediaType] = contentType.split(";", 1);

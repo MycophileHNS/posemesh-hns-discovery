@@ -4,6 +4,8 @@ import type { RequestOptions } from "node:https";
 export type DiscoveryRecordKind = "posemesh" | "agent-identity";
 export type ManifestSecurityMode = "strict" | "permissive" | "demo";
 export type ManifestSignatureAlgorithm = "ed25519" | "ecdsa-p256-sha256";
+export type ManifestCacheStatus = "fresh" | "stale" | "uncacheable";
+export type ManifestDaneStatus = "not-requested" | "validated" | "no-records" | "failed";
 
 export interface PosemeshServiceEndpoint {
   id?: string;
@@ -101,6 +103,40 @@ export interface ManifestVerificationResult {
   expiresAt?: string;
 }
 
+export interface ManifestCacheMetadata {
+  cacheStatus: ManifestCacheStatus;
+  checkedAt: string;
+  issuedAt?: string;
+  expiresAt?: string;
+  ageMs?: number;
+  maxManifestAgeMs?: number;
+  reason?: string;
+}
+
+export interface ManifestTlsaRecord {
+  certUsage: number;
+  selector: number;
+  matchingType?: number;
+  match?: number;
+  certificateAssociationData?: string | ArrayBuffer | Uint8Array;
+  data?: string | ArrayBuffer | Uint8Array;
+}
+
+export interface ManifestDaneMetadata {
+  status: ManifestDaneStatus;
+  checkedAt: string;
+  host: string;
+  port: number;
+  recordName: string;
+  recordCount: number;
+  matchedRecord?: {
+    certUsage: number;
+    selector: number;
+    matchingType: number;
+  };
+  error?: string;
+}
+
 export interface NormalizedDiscoveryResult {
   name: string;
   sourceName: string;
@@ -118,6 +154,8 @@ export interface NormalizedDiscoveryResult {
   healthCheck?: string;
   manifestUrl?: string;
   manifestVerification?: ManifestVerificationResult;
+  manifestCache?: ManifestCacheMetadata;
+  manifestDane?: ManifestDaneMetadata;
   agentEndpoints: string[];
   resolvedAt: string;
   warnings: ParseWarning[];
@@ -150,6 +188,16 @@ export type ManifestHttpsRequest = (
   callback?: (response: IncomingMessage) => void,
 ) => ClientRequest;
 
+/**
+ * Resolves TLSA records for a manifest hostname. Production Handshake clients
+ * should provide a Handshake-aware resolver here; the default implementation
+ * uses Node's configured DNS resolver for compatibility with tests and demos.
+ */
+export type ManifestTlsaResolver = (
+  hostname: string,
+  port: number,
+) => Promise<ManifestTlsaRecord[]>;
+
 export interface FetchPosemeshManifestOptions {
   timeoutMs?: number;
   maxBytes?: number;
@@ -157,16 +205,36 @@ export interface FetchPosemeshManifestOptions {
   httpsRequest?: ManifestHttpsRequest;
   securityMode?: ManifestSecurityMode;
   trustedKeys?: ManifestVerificationKey[];
+  tlsPins?: Record<string, string[]>;
+  /**
+   * Opt in to DANE TLSA validation for the manifest host. When enabled and no
+   * TLSA records exist, the fetch falls back to normal TLS and returns a warning.
+   */
+  enableDane?: boolean;
+  /**
+   * Require a matching TLSA record. This fails closed when records are missing,
+   * lookup fails, or the presented certificate does not match.
+   */
+  requireTlsa?: boolean;
+  /**
+   * Optional TLSA resolver. Use this to plug in a Handshake-aware resolver for
+   * `_443._tcp.<manifest-host>` records.
+   */
+  resolveTlsa?: ManifestTlsaResolver;
+  allowMissingContentType?: boolean;
   expectedName?: string;
   expectedManifestUrl?: string;
   now?: () => Date;
   maxClockSkewMs?: number;
   maxManifestTtlMs?: number;
+  maxManifestAgeMs?: number;
 }
 
 export interface FetchedPosemeshManifest {
   manifest: PosemeshManifest;
   verification: ManifestVerificationResult;
+  cache: ManifestCacheMetadata;
+  dane?: ManifestDaneMetadata;
   warnings?: ParseWarning[];
 }
 

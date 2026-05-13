@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import type { RequestOptions } from "node:https";
@@ -189,6 +189,23 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("rejects additional reserved and multicast manifest addresses", async () => {
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://192.88.99.1/posemesh.json"),
+      /localhost|private|reserved/,
+    );
+
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://[2001:db8::1]/posemesh.json"),
+      /localhost|private|reserved/,
+    );
+
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://[ff02::1]/posemesh.json"),
+      /localhost|private|reserved/,
+    );
+  });
+
   it("fetches manifest JSON through the pinned HTTPS request path", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({
@@ -273,6 +290,231 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("allows missing Content-Type only when explicitly configured", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifest(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body, undefined, null),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /Content-Type application\/json/,
+    );
+
+    const manifest = await fetchPosemeshManifest(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(signed.body, undefined, null),
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+      allowMissingContentType: true,
+    });
+
+    assert.equal(manifest.sourceName, "hq.posemesh");
+  });
+
+  it("enforces configured TLS SPKI pins", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-spki", "utf8");
+    const expectedPin = createHash("sha256").update(peerSpki).digest("base64");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    const manifest = await fetchPosemeshManifest(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(
+        signed.body,
+        undefined,
+        "application/json",
+        peerSpki,
+      ),
+      tlsPins: { "manifest.example.test": [expectedPin] },
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(manifest.sourceName, "hq.posemesh");
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifest(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(
+            signed.body,
+            undefined,
+            "application/json",
+            peerSpki,
+          ),
+          tlsPins: { "manifest.example.test": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="] },
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /SPKI pin mismatch/,
+    );
+  });
+
+  it("validates opt-in DANE TLSA records for manifest hosts", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(
+        signed.body,
+        undefined,
+        "application/json",
+        peerSpki,
+      ),
+      enableDane: true,
+      resolveTlsa: async (hostname, port) => {
+        assert.equal(hostname, "manifest.example.test");
+        assert.equal(port, 443);
+
+        return [
+          {
+            certUsage: 3,
+            selector: 1,
+            matchingType: 1,
+            data: createHash("sha256").update(peerSpki).digest(),
+          },
+        ];
+      },
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.dane?.status, "validated");
+    assert.equal(fetched.dane?.recordName, "_443._tcp.manifest.example.test");
+    assert.equal(fetched.dane?.matchedRecord?.selector, 1);
+  });
+
+  it("falls back with a warning when optional DANE has no TLSA records", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(
+        signed.body,
+        undefined,
+        "application/json",
+        peerSpki,
+      ),
+      enableDane: true,
+      resolveTlsa: async () => [],
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.dane?.status, "no-records");
+    assert.match(fetched.warnings?.[0]?.message ?? "", /No TLSA records/);
+  });
+
+  it("fails closed when requireTlsa is enabled and no TLSA records exist", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(
+            signed.body,
+            undefined,
+            "application/json",
+            peerSpki,
+          ),
+          securityMode: "strict",
+          enableDane: true,
+          requireTlsa: true,
+          resolveTlsa: async () => [],
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /TLSA records are required/,
+    );
+  });
+
+  it("rejects mismatched DANE TLSA records", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(
+            signed.body,
+            undefined,
+            "application/json",
+            peerSpki,
+          ),
+          enableDane: true,
+          resolveTlsa: async () => [
+            {
+              certUsage: 3,
+              selector: 1,
+              matchingType: 1,
+              data: createHash("sha256").update("wrong-spki").digest(),
+            },
+          ],
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /did not match any TLSA record/,
+    );
+  });
+
   it("rejects unsigned fetched manifests in strict mode", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({
@@ -313,6 +555,54 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(fetched.manifest.sourceName, "hq.posemesh");
     assert.equal(fetched.verification.status, "unsigned-allowed");
     assert.match(fetched.warnings?.[0]?.message ?? "", /unsigned manifest/);
+  });
+
+  it("returns cache metadata from manifest freshness policy", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(signed.body),
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+      maxManifestAgeMs: 2 * 60 * 60 * 1000,
+    });
+
+    assert.equal(fetched.cache.cacheStatus, "fresh");
+    assert.equal(fetched.cache.ageMs, 60 * 60 * 1000);
+    assert.equal(fetched.cache.maxManifestAgeMs, 2 * 60 * 60 * 1000);
+  });
+
+  it("rejects manifests older than maxManifestAgeMs", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T03:00:00.000Z"),
+          maxManifestAgeMs: 60 * 60 * 1000,
+        }),
+      /Manifest age/,
+    );
   });
 
   it("rejects invalid signed envelopes in permissive mode", async () => {
@@ -434,7 +724,8 @@ function createSignedManifestBody(
 function createManifestHttpsRequest(
   body: string,
   onRequest?: (options: RequestOptions) => void,
-  contentType = "application/json; charset=utf-8",
+  contentType: string | null = "application/json; charset=utf-8",
+  peerCertificatePubkey?: Buffer,
 ): NonNullable<FetchPosemeshManifestOptions["httpsRequest"]> {
   return ((options: RequestOptions, callback?: (response: IncomingMessage) => void) => {
     const req = new EventEmitter() as ClientRequest;
@@ -458,9 +749,22 @@ function createManifestHttpsRequest(
       const response = new PassThrough() as PassThrough & Partial<IncomingMessage>;
       response.statusCode = 200;
       response.headers = {
-        "content-type": contentType,
         "content-length": String(Buffer.byteLength(body)),
       };
+
+      if (contentType !== null) {
+        response.headers["content-type"] = contentType;
+      }
+
+      if (peerCertificatePubkey) {
+        Object.defineProperty(response, "socket", {
+          value: {
+            getPeerCertificate: () => ({
+              pubkey: peerCertificatePubkey,
+            }),
+          },
+        });
+      }
 
       callback?.(response as IncomingMessage);
       response.end(body);
