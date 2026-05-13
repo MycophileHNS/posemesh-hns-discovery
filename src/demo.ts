@@ -1,13 +1,13 @@
 import type { PosemeshManifest } from "./types.ts";
 
-const HQ_TXT_KEY = "02aa";
-const HQ_DOMAIN_KEY = "02bb";
-const HQ_RELAY_KEY = "02cc";
-const HQ_RECONSTRUCTION_KEY = "02dd";
-const NILS_AGENT_KEY = "02ee";
-const AMERICA_NORTH_KEY = "02ff";
-const RELAY_DIRECTORY_KEY = "03aa";
-const DOMAIN_DIRECTORY_KEY = "03bb";
+const HQ_TXT_KEY = "aa".repeat(32);
+const HQ_DOMAIN_KEY = "ab".repeat(32);
+const HQ_RELAY_KEY = "ac".repeat(32);
+const HQ_RECONSTRUCTION_KEY = "ad".repeat(32);
+const NILS_AGENT_KEY = "bb".repeat(32);
+const AMERICA_NORTH_KEY = "cc".repeat(32);
+const RELAY_DIRECTORY_KEY = "dd".repeat(32);
+const DOMAIN_DIRECTORY_KEY = "ee".repeat(32);
 
 export const demoTxtRecords: Record<string, string[]> = {
   "hq.posemesh": [

@@ -15,6 +15,7 @@ import type {
   ManifestDaneMetadata,
   ManifestHostResolver,
   ManifestHttpsRequest,
+  ManifestLimits,
   ManifestResolvedAddress,
   ManifestSecurityMode,
   ManifestTlsaRecord,
@@ -36,6 +37,34 @@ const DEFAULT_MANIFEST_MAX_BYTES = 128 * 1024;
 const DEFAULT_MANIFEST_SECURITY_MODE: ManifestSecurityMode = "strict";
 const DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_MANIFEST_MAX_TTL_MS = 24 * 60 * 60 * 1000;
+
+interface ResolvedManifestLimits {
+  maxStringBytes: number;
+  maxUrlBytes: number;
+  maxArrayItems: number;
+  maxCapabilities: number;
+  maxPublicKeys: number;
+  maxServicesPerCategory: number;
+  maxTotalServices: number;
+  maxWallets: number;
+  maxRegions: number;
+  maxAudience: number;
+  maxModels: number;
+}
+
+const DEFAULT_MANIFEST_LIMITS: ResolvedManifestLimits = {
+  maxStringBytes: 2_048,
+  maxUrlBytes: 4_096,
+  maxArrayItems: 128,
+  maxCapabilities: 128,
+  maxPublicKeys: 32,
+  maxServicesPerCategory: 64,
+  maxTotalServices: 256,
+  maxWallets: 64,
+  maxRegions: 64,
+  maxAudience: 16,
+  maxModels: 32,
+};
 
 interface ManifestFetchPolicy {
   timeoutMs: number;
@@ -139,7 +168,12 @@ export async function fetchPosemeshManifestWithVerification(
   };
 }
 
-export function parsePosemeshManifest(value: unknown): PosemeshManifest {
+export function parsePosemeshManifest(
+  value: unknown,
+  limits: ManifestLimits = {},
+): PosemeshManifest {
+  const resolvedLimits = resolveManifestLimits(limits);
+
   if (!isRecord(value)) {
     throw new Error("Manifest must be a JSON object.");
   }
@@ -148,36 +182,68 @@ export function parsePosemeshManifest(value: unknown): PosemeshManifest {
     throw new Error("Manifest version must be 1.");
   }
 
-  const manifest: PosemeshManifest = {
-    version: 1,
-    ...optionalStringField(value, "name"),
-    ...optionalStringField(value, "sourceName"),
-    ...optionalUrlField(value, "manifestUrl", ["https:"]),
-    audience: parseAudience(value.audience),
-    ...optionalStringField(value, "issuedAt"),
-    ...optionalStringField(value, "expiresAt"),
-    regions: parseStringArray(value.regions),
-    domainManagers: parseDomainManagers(value.domainManagers),
-    relays: parseRelays(value.relays),
-    reconstructionNodes: parseServiceEndpoints<ReconstructionNode>(
-      value.reconstructionNodes,
-      "reconstructionNodes",
-    ),
-    splatterNodes: parseServiceEndpoints<SplatterNode>(value.splatterNodes, "splatterNodes"),
-    vlmNodes: parseVlmNodes(value.vlmNodes),
-    pathfindingServices: parseServiceEndpoints<PathfindingService>(
-      value.pathfindingServices,
-      "pathfindingServices",
-    ),
-    bootstrapNodes: parseBootstrapNodes(value.bootstrapNodes),
-    wallets: parseWallets(value.wallets),
-    publicKeys: parsePublicKeyArray(value.publicKeys, "publicKeys"),
-    capabilities: parseStringArray(value.capabilities),
-    ...optionalUrlField(value, "healthCheck", ["https:"]),
-    ...optionalStringField(value, "signature"),
-  };
+  const domainManagers = parseDomainManagers(value.domainManagers, resolvedLimits);
+  const relays = parseRelays(value.relays, resolvedLimits);
+  const reconstructionNodes = parseServiceEndpoints<ReconstructionNode>(
+    value.reconstructionNodes,
+    "reconstructionNodes",
+    resolvedLimits,
+  );
+  const splatterNodes = parseServiceEndpoints<SplatterNode>(
+    value.splatterNodes,
+    "splatterNodes",
+    resolvedLimits,
+  );
+  const vlmNodes = parseVlmNodes(value.vlmNodes, resolvedLimits);
+  const pathfindingServices = parseServiceEndpoints<PathfindingService>(
+    value.pathfindingServices,
+    "pathfindingServices",
+    resolvedLimits,
+  );
+  const bootstrapNodes = parseBootstrapNodes(value.bootstrapNodes, resolvedLimits);
+  const totalServices =
+    domainManagers.length +
+    relays.length +
+    reconstructionNodes.length +
+    splatterNodes.length +
+    vlmNodes.length +
+    pathfindingServices.length +
+    bootstrapNodes.length;
 
-  return manifest;
+  enforceManifestMaxCount(totalServices, resolvedLimits.maxTotalServices, "service endpoints");
+
+  return {
+    version: 1,
+    ...optionalStringField(value, "name", resolvedLimits),
+    ...optionalStringField(value, "sourceName", resolvedLimits),
+    ...optionalUrlField(value, "manifestUrl", ["https:"], resolvedLimits),
+    audience: parseAudience(value.audience, resolvedLimits),
+    ...optionalStringField(value, "issuedAt", resolvedLimits),
+    ...optionalStringField(value, "expiresAt", resolvedLimits),
+    regions: parseStringArray(
+      value.regions,
+      "regions",
+      manifestArrayLimit(resolvedLimits, resolvedLimits.maxRegions),
+      resolvedLimits,
+    ),
+    domainManagers,
+    relays,
+    reconstructionNodes,
+    splatterNodes,
+    vlmNodes,
+    pathfindingServices,
+    bootstrapNodes,
+    wallets: parseWallets(value.wallets, resolvedLimits),
+    publicKeys: parsePublicKeyArray(value.publicKeys, "publicKeys", resolvedLimits),
+    capabilities: parseStringArray(
+      value.capabilities,
+      "capabilities",
+      manifestArrayLimit(resolvedLimits, resolvedLimits.maxCapabilities),
+      resolvedLimits,
+    ),
+    ...optionalUrlField(value, "healthCheck", ["https:"], resolvedLimits),
+    ...optionalStringField(value, "signature", resolvedLimits),
+  };
 }
 
 /**
@@ -214,7 +280,7 @@ export function parseFetchedManifestText(
     }
   }
 
-  const unsignedManifest = parsePosemeshManifest(parsed);
+  const unsignedManifest = parsePosemeshManifest(parsed, options.manifestLimits);
   const warnings = [
     createManifestWarning(
       originalUrl,
@@ -271,7 +337,10 @@ function parseVerifiedFetchedManifest(
   }
 
   const verifiedEnvelope = verifySignedManifestEnvelopeText(text, trustedKeys, now);
-  const manifest = parsePosemeshManifest(JSON.parse(verifiedEnvelope.payloadText) as unknown);
+  const manifest = parsePosemeshManifest(
+    JSON.parse(verifiedEnvelope.payloadText) as unknown,
+    options.manifestLimits,
+  );
 
   return createFetchedManifestResult(
     manifest,
@@ -291,7 +360,7 @@ function parseDemoInvalidSignedManifest(
   verificationError: unknown,
 ): FetchedPosemeshManifest {
   const payloadText = decodeEnvelopePayloadText(parsed);
-  const manifest = parsePosemeshManifest(JSON.parse(payloadText) as unknown);
+  const manifest = parsePosemeshManifest(JSON.parse(payloadText) as unknown, options.manifestLimits);
   const envelopeMetadata = readEnvelopeMetadata(parsed);
   const message =
     verificationError instanceof Error ? verificationError.message : "Unknown signature error.";
@@ -463,34 +532,49 @@ function validateManifestSecurityClaims(
   };
 }
 
-function parseDomainManagers(value: unknown): DomainManager[] {
-  return parseObjectArray(value, "domainManagers").map((item) => {
+function parseDomainManagers(
+  value: unknown,
+  limits: ResolvedManifestLimits,
+): DomainManager[] {
+  return parseObjectArray(
+    value,
+    "domainManagers",
+    manifestArrayLimit(limits, limits.maxServicesPerCategory),
+  ).map((item) => {
     return {
-      ...parseServiceEndpoint<DomainManager>(item, "domainManagers"),
-      ...optionalStringField(item, "wallet"),
+      ...parseServiceEndpoint<DomainManager>(item, "domainManagers", limits),
+      ...optionalStringField(item, "wallet", limits),
     };
   });
 }
 
-function parseRelays(value: unknown): Relay[] {
-  return parseObjectArray(value, "relays").map((item) => {
+function parseRelays(value: unknown, limits: ResolvedManifestLimits): Relay[] {
+  return parseObjectArray(value, "relays", manifestArrayLimit(limits, limits.maxServicesPerCategory)).map((item) => {
     return {
-      ...parseServiceEndpoint<Relay>(item, "relays"),
-      ...optionalStringField(item, "sessionPolicy"),
+      ...parseServiceEndpoint<Relay>(item, "relays", limits),
+      ...optionalStringField(item, "sessionPolicy", limits),
     };
   });
 }
 
-function parseBootstrapNodes(value: unknown): BootstrapNode[] {
-  return parseServiceEndpoints<BootstrapNode>(value, "bootstrapNodes");
+function parseBootstrapNodes(
+  value: unknown,
+  limits: ResolvedManifestLimits,
+): BootstrapNode[] {
+  return parseServiceEndpoints<BootstrapNode>(value, "bootstrapNodes", limits);
 }
 
-function parseVlmNodes(value: unknown): VlmNode[] {
-  return parseObjectArray(value, "vlmNodes").map((item) => {
-    const models = parseStringArray(item.models);
+function parseVlmNodes(value: unknown, limits: ResolvedManifestLimits): VlmNode[] {
+  return parseObjectArray(value, "vlmNodes", manifestArrayLimit(limits, limits.maxServicesPerCategory)).map((item) => {
+    const models = parseStringArray(
+      item.models,
+      "vlmNodes.models",
+      manifestArrayLimit(limits, limits.maxModels),
+      limits,
+    );
 
     return {
-      ...parseServiceEndpoint<VlmNode>(item, "vlmNodes"),
+      ...parseServiceEndpoint<VlmNode>(item, "vlmNodes", limits),
       ...(models.length > 0 ? { models } : {}),
     };
   });
@@ -499,38 +583,51 @@ function parseVlmNodes(value: unknown): VlmNode[] {
 function parseServiceEndpoints<T extends PosemeshServiceEndpoint>(
   value: unknown,
   field: string,
+  limits: ResolvedManifestLimits,
 ): T[] {
-  return parseObjectArray(value, field).map((item) => parseServiceEndpoint<T>(item, field));
+  return parseObjectArray(value, field, manifestArrayLimit(limits, limits.maxServicesPerCategory)).map((item) =>
+    parseServiceEndpoint<T>(item, field, limits),
+  );
 }
 
 function parseServiceEndpoint<T extends PosemeshServiceEndpoint>(
   value: Record<string, unknown>,
   field: string,
+  limits: ResolvedManifestLimits,
 ): T {
   const endpoint: PosemeshServiceEndpoint = {
-    ...optionalStringField(value, "id"),
-    ...optionalStringField(value, "name"),
-    endpoint: requiredUrlField(value, "endpoint", field, ["https:", "wss:"]),
-    ...optionalStringField(value, "region"),
-    ...optionalStringField(value, "transport"),
-    ...optionalPublicKeyField(value, "publicKey"),
-    capabilities: parseStringArray(value.capabilities),
-    ...optionalUrlField(value, "healthCheck", ["https:"]),
+    ...optionalStringField(value, "id", limits),
+    ...optionalStringField(value, "name", limits),
+    endpoint: requiredUrlField(value, "endpoint", field, ["https:", "wss:"], limits),
+    ...optionalStringField(value, "region", limits),
+    ...optionalStringField(value, "transport", limits),
+    ...optionalPublicKeyField(value, "publicKey", limits),
+    capabilities: parseStringArray(
+      value.capabilities,
+      `${field}.capabilities`,
+      manifestArrayLimit(limits, limits.maxCapabilities),
+      limits,
+    ),
+    ...optionalUrlField(value, "healthCheck", ["https:"], limits),
   };
 
   return endpoint as T;
 }
 
-function parseWallets(value: unknown): WalletReference[] {
-  return parseObjectArray(value, "wallets").map((item) => ({
-    address: requiredStringField(item, "address", "wallets"),
-    ...optionalStringField(item, "chain"),
-    ...optionalStringField(item, "role"),
-    ...optionalPublicKeyField(item, "publicKey"),
+function parseWallets(value: unknown, limits: ResolvedManifestLimits): WalletReference[] {
+  return parseObjectArray(value, "wallets", manifestArrayLimit(limits, limits.maxWallets)).map((item) => ({
+    address: requiredStringField(item, "address", "wallets", limits),
+    ...optionalStringField(item, "chain", limits),
+    ...optionalStringField(item, "role", limits),
+    ...optionalPublicKeyField(item, "publicKey", limits),
   }));
 }
 
-function parseObjectArray(value: unknown, field: string): Record<string, unknown>[] {
+function parseObjectArray(
+  value: unknown,
+  field: string,
+  maxItems: number,
+): Record<string, unknown>[] {
   if (value === undefined) {
     return [];
   }
@@ -538,6 +635,8 @@ function parseObjectArray(value: unknown, field: string): Record<string, unknown
   if (!Array.isArray(value)) {
     throw new Error(`Manifest field ${field} must be an array.`);
   }
+
+  enforceManifestMaxCount(value.length, maxItems, `Manifest field ${field}`);
 
   return value.map((item, index) => {
     if (!isRecord(item)) {
@@ -548,7 +647,12 @@ function parseObjectArray(value: unknown, field: string): Record<string, unknown
   });
 }
 
-function parseStringArray(value: unknown): string[] {
+function parseStringArray(
+  value: unknown,
+  field: string,
+  maxItems: number,
+  limits: ResolvedManifestLimits,
+): string[] {
   if (value === undefined) {
     return [];
   }
@@ -557,16 +661,26 @@ function parseStringArray(value: unknown): string[] {
     throw new Error("Manifest string list must be an array.");
   }
 
+  enforceManifestMaxCount(value.length, maxItems, `Manifest field ${field}`);
+
   return value.map((item, index) => {
     if (typeof item !== "string" || !item.trim()) {
-      throw new Error(`Manifest string list item ${index} must be a non-empty string.`);
+      throw new Error(
+        `Manifest string list item ${index} (${field}[${index}]) must be a non-empty string.`,
+      );
     }
 
-    return item.trim();
+    const trimmed = item.trim();
+    enforceManifestMaxBytes(
+      trimmed,
+      limits.maxStringBytes,
+      `Manifest field ${field}[${index}]`,
+    );
+    return trimmed;
   });
 }
 
-function parseAudience(value: unknown): string[] {
+function parseAudience(value: unknown, limits: ResolvedManifestLimits): string[] {
   if (value === undefined) {
     return [];
   }
@@ -576,14 +690,20 @@ function parseAudience(value: unknown): string[] {
       throw new Error("Manifest audience must be a non-empty string or string array.");
     }
 
-    return [value.trim()];
+    const trimmed = value.trim();
+    enforceManifestMaxBytes(trimmed, limits.maxStringBytes, "Manifest field audience");
+    return [trimmed];
   }
 
-  return parseStringArray(value);
+  return parseStringArray(value, "audience", manifestArrayLimit(limits, limits.maxAudience), limits);
 }
 
-function parsePublicKeyArray(value: unknown, field: string): string[] {
-  return parseStringArray(value).map((item, index) =>
+function parsePublicKeyArray(
+  value: unknown,
+  field: string,
+  limits: ResolvedManifestLimits,
+): string[] {
+  return parseStringArray(value, field, manifestArrayLimit(limits, limits.maxPublicKeys), limits).map((item, index) =>
     parsePublicKey(item, `Manifest field ${field}[${index}]`),
   );
 }
@@ -592,6 +712,7 @@ function requiredStringField(
   value: Record<string, unknown>,
   field: string,
   parent: string,
+  limits: ResolvedManifestLimits,
 ): string {
   const item = value[field];
 
@@ -599,7 +720,9 @@ function requiredStringField(
     throw new Error(`Manifest field ${parent}.${field} is required.`);
   }
 
-  return item.trim();
+  const trimmed = item.trim();
+  enforceManifestMaxBytes(trimmed, limits.maxStringBytes, `Manifest field ${parent}.${field}`);
+  return trimmed;
 }
 
 function requiredUrlField(
@@ -607,13 +730,20 @@ function requiredUrlField(
   field: string,
   parent: string,
   protocols: string[],
+  limits: ResolvedManifestLimits,
 ): string {
-  return validateUrl(requiredStringField(value, field, parent), `${parent}.${field}`, protocols);
+  return validateUrl(
+    requiredStringField(value, field, parent, limits),
+    `${parent}.${field}`,
+    protocols,
+    limits,
+  );
 }
 
 function optionalStringField<T extends string>(
   value: Record<string, unknown>,
   field: T,
+  limits: ResolvedManifestLimits,
 ): Partial<Record<T, string>> {
   const item = value[field];
 
@@ -625,14 +755,17 @@ function optionalStringField<T extends string>(
     throw new Error(`Manifest field ${field} must be a non-empty string.`);
   }
 
-  return { [field]: item.trim() } as Partial<Record<T, string>>;
+  const trimmed = item.trim();
+  enforceManifestMaxBytes(trimmed, limits.maxStringBytes, `Manifest field ${field}`);
+  return { [field]: trimmed } as Partial<Record<T, string>>;
 }
 
 function optionalPublicKeyField<T extends string>(
   value: Record<string, unknown>,
   field: T,
+  limits: ResolvedManifestLimits,
 ): Partial<Record<T, string>> {
-  const stringField = optionalStringField(value, field);
+  const stringField = optionalStringField(value, field, limits);
   const item = stringField[field];
 
   if (!item) {
@@ -648,8 +781,9 @@ function optionalUrlField<T extends string>(
   value: Record<string, unknown>,
   field: T,
   protocols: string[],
+  limits: ResolvedManifestLimits,
 ): Partial<Record<T, string>> {
-  const stringField = optionalStringField(value, field);
+  const stringField = optionalStringField(value, field, limits);
   const item = stringField[field];
 
   if (!item) {
@@ -657,7 +791,7 @@ function optionalUrlField<T extends string>(
   }
 
   return {
-    [field]: validateUrl(item, field, protocols),
+    [field]: validateUrl(item, field, protocols, limits),
   } as Partial<Record<T, string>>;
 }
 
@@ -896,6 +1030,100 @@ function readOptionalNonNegativeMillisecondsOption(
   return readNonNegativeMillisecondsOption(value, field);
 }
 
+function resolveManifestLimits(limits: ManifestLimits): ResolvedManifestLimits {
+  return {
+    maxStringBytes: readPositiveIntegerLimit(
+      limits.maxStringBytes,
+      DEFAULT_MANIFEST_LIMITS.maxStringBytes,
+      "maxStringBytes",
+    ),
+    maxUrlBytes: readPositiveIntegerLimit(
+      limits.maxUrlBytes,
+      DEFAULT_MANIFEST_LIMITS.maxUrlBytes,
+      "maxUrlBytes",
+    ),
+    maxArrayItems: readPositiveIntegerLimit(
+      limits.maxArrayItems,
+      DEFAULT_MANIFEST_LIMITS.maxArrayItems,
+      "maxArrayItems",
+    ),
+    maxCapabilities: readPositiveIntegerLimit(
+      limits.maxCapabilities,
+      DEFAULT_MANIFEST_LIMITS.maxCapabilities,
+      "maxCapabilities",
+    ),
+    maxPublicKeys: readPositiveIntegerLimit(
+      limits.maxPublicKeys,
+      DEFAULT_MANIFEST_LIMITS.maxPublicKeys,
+      "maxPublicKeys",
+    ),
+    maxServicesPerCategory: readPositiveIntegerLimit(
+      limits.maxServicesPerCategory,
+      DEFAULT_MANIFEST_LIMITS.maxServicesPerCategory,
+      "maxServicesPerCategory",
+    ),
+    maxTotalServices: readPositiveIntegerLimit(
+      limits.maxTotalServices,
+      DEFAULT_MANIFEST_LIMITS.maxTotalServices,
+      "maxTotalServices",
+    ),
+    maxWallets: readPositiveIntegerLimit(
+      limits.maxWallets,
+      DEFAULT_MANIFEST_LIMITS.maxWallets,
+      "maxWallets",
+    ),
+    maxRegions: readPositiveIntegerLimit(
+      limits.maxRegions,
+      DEFAULT_MANIFEST_LIMITS.maxRegions,
+      "maxRegions",
+    ),
+    maxAudience: readPositiveIntegerLimit(
+      limits.maxAudience,
+      DEFAULT_MANIFEST_LIMITS.maxAudience,
+      "maxAudience",
+    ),
+    maxModels: readPositiveIntegerLimit(
+      limits.maxModels,
+      DEFAULT_MANIFEST_LIMITS.maxModels,
+      "maxModels",
+    ),
+  };
+}
+
+function readPositiveIntegerLimit(
+  value: number | undefined,
+  fallback: number,
+  field: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`Manifest limit ${field} must be a positive integer.`);
+  }
+
+  return value;
+}
+
+function enforceManifestMaxCount(count: number, max: number, field: string): void {
+  if (count > max) {
+    throw new Error(`${field} exceeds limit ${max}.`);
+  }
+}
+
+function enforceManifestMaxBytes(value: string, max: number, field: string): void {
+  const bytes = Buffer.byteLength(value, "utf8");
+
+  if (bytes > max) {
+    throw new Error(`${field} exceeds ${max} bytes.`);
+  }
+}
+
+function manifestArrayLimit(limits: ResolvedManifestLimits, specificLimit: number): number {
+  return Math.min(limits.maxArrayItems, specificLimit);
+}
+
 function normalizeUrlString(value: string): string {
   const parsed = new URL(value);
 
@@ -955,7 +1183,13 @@ async function assertSafeManifestUrl(
   return { url: parsed, addresses };
 }
 
-function validateUrl(url: string, field: string, protocols: string[]): string {
+function validateUrl(
+  url: string,
+  field: string,
+  protocols: string[],
+  limits: ResolvedManifestLimits,
+): string {
+  enforceManifestMaxBytes(url, limits.maxUrlBytes, `Manifest field ${field}`);
   let parsed: URL;
 
   try {

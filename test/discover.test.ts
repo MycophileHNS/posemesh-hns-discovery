@@ -9,12 +9,12 @@ import { MockResolver } from "../src/resolvers.ts";
 import type { PosemeshManifest } from "../src/types.ts";
 
 const fixedNow = new Date("2026-05-11T00:00:00.000Z");
-const TXT_KEY = "02aa";
-const MANIFEST_KEY = "02bb";
-const WALLET_KEY = "02cc";
-const MANAGER_KEY = "02dd";
-const RELAY_KEY = "02ee";
-const RECONSTRUCTION_KEY = "02ff";
+const TXT_KEY = "aa".repeat(32);
+const MANIFEST_KEY = "bb".repeat(32);
+const WALLET_KEY = "cc".repeat(32);
+const MANAGER_KEY = "dd".repeat(32);
+const RELAY_KEY = "ee".repeat(32);
+const RECONSTRUCTION_KEY = "ff".repeat(32);
 
 describe("discoverPosemesh", () => {
   it("returns normalized discovery output from TXT and manifest data", async () => {

@@ -212,6 +212,32 @@ export interface ParsedTxtRecords {
   warnings: ParseWarning[];
 }
 
+export interface ParserLimits {
+  maxTxtRecords?: number;
+  maxTxtRecordBytes?: number;
+  maxTotalTxtBytes?: number;
+  maxFieldsPerRecord?: number;
+  maxFieldNameBytes?: number;
+  maxFieldValueBytes?: number;
+  maxCapabilities?: number;
+  maxPublicKeys?: number;
+  maxAgentIdentityBytes?: number;
+}
+
+export interface ManifestLimits {
+  maxStringBytes?: number;
+  maxUrlBytes?: number;
+  maxArrayItems?: number;
+  maxCapabilities?: number;
+  maxPublicKeys?: number;
+  maxServicesPerCategory?: number;
+  maxTotalServices?: number;
+  maxWallets?: number;
+  maxRegions?: number;
+  maxAudience?: number;
+  maxModels?: number;
+}
+
 export interface ManifestResolvedAddress {
   address: string;
   family: 4 | 6;
@@ -265,6 +291,7 @@ export interface FetchPosemeshManifestOptions {
    */
   resolveTlsa?: ManifestTlsaResolver;
   allowMissingContentType?: boolean;
+  manifestLimits?: ManifestLimits;
   expectedName?: string;
   expectedManifestUrl?: string;
   /**
@@ -295,6 +322,7 @@ export interface DiscoverPosemeshOptions {
   resolver?: TxtResolver;
   tlsaResolver?: TlsaResolver;
   dnsServer?: string;
+  parserLimits?: ParserLimits;
   fetchManifest?: boolean;
   manifestFetchOptions?: FetchPosemeshManifestOptions;
   manifestFetcher?: ManifestFetcher;

@@ -132,13 +132,13 @@ Until those decisions are made, this repository should remain an unofficial prot
 Compact Posemesh discovery record:
 
 ```txt
-posemesh:v1; manifest=https://example.com/posemesh.json; publicKey=02abcdef; capabilities=domain-discovery,relay-discovery
+posemesh:v1; manifest=https://example.com/posemesh.json; publicKey=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; capabilities=domain-discovery,relay-discovery
 ```
 
 Agent identity record:
 
 ```txt
-agent-identity:v1={"version":1,"endpoint":"https://example.com/agent.json","publicKey":"02abcdef","capabilities":["domain-discovery","relay-discovery"]}
+agent-identity:v1={"version":1,"endpoint":"https://example.com/agent.json","publicKey":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","capabilities":["domain-discovery","relay-discovery"]}
 ```
 
 In this prototype, `manifest` points to Posemesh discovery JSON. `endpoint` in an `agent-identity:v1` record is kept as an agent endpoint, not treated as a Posemesh manifest unless the name also publishes a separate `posemesh:v1` manifest record.

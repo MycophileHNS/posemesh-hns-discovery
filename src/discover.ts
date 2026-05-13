@@ -22,7 +22,7 @@ export async function discoverPosemesh(
   const normalizedName = assertValidPosemeshName(name);
   const resolver = options.resolver ?? new DnsResolver(options.dnsServer);
   const txtRecords = await resolver.resolveTxt(normalizedName);
-  const parsedTxt = parseTxtRecords(txtRecords);
+  const parsedTxt = parseTxtRecords(txtRecords, options.parserLimits);
   const shouldFetchManifest = options.fetchManifest ?? true;
   const warnings = [...parsedTxt.warnings];
   appendDiscoveryRecordWarning(normalizedName, txtRecords, parsedTxt.records, warnings);

@@ -131,6 +131,43 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("enforces manifest schema limits", () => {
+    assert.throws(
+      () =>
+        parsePosemeshManifest(
+          {
+            version: 1,
+            capabilities: ["one", "two"],
+          },
+          { maxCapabilities: 1 },
+        ),
+      /capabilities exceeds limit 1/,
+    );
+
+    assert.throws(
+      () =>
+        parsePosemeshManifest(
+          {
+            version: 1,
+            sourceName: "x".repeat(16),
+          },
+          { maxStringBytes: 8 },
+        ),
+      /sourceName exceeds 8 bytes/,
+    );
+  });
+
+  it("rejects algorithm-specific public keys with invalid lengths", () => {
+    assert.throws(
+      () =>
+        parsePosemeshManifest({
+          version: 1,
+          publicKeys: ["02aa"],
+        }),
+      /Ed25519|P-256/,
+    );
+  });
+
   it("rejects insecure manifest and service URLs", async () => {
     await assert.rejects(
       () => fetchPosemeshManifest("http://example.com/posemesh.json"),
@@ -216,7 +253,7 @@ describe("Posemesh manifest parsing", () => {
       manifestUrl,
       issuedAt: "2026-05-12T00:00:00.000Z",
       expiresAt: "2026-05-12T12:00:00.000Z",
-      publicKeys: ["02aa"],
+      publicKeys: ["aa".repeat(32)],
     });
     const body = signed.body;
     let requestOptions: RequestOptions | undefined;
@@ -233,7 +270,7 @@ describe("Posemesh manifest parsing", () => {
     });
 
     assert.equal(manifest.sourceName, "hq.posemesh");
-    assert.deepEqual(manifest.publicKeys, ["02aa"]);
+    assert.deepEqual(manifest.publicKeys, ["aa".repeat(32)]);
     assert.equal(requestOptions?.hostname, "manifest.example.test");
     assert.equal(typeof requestOptions?.lookup, "function");
   });

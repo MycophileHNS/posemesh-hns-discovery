@@ -6,8 +6,10 @@ import {
   parseTxtRecords,
 } from "../src/parser.ts";
 
-const TXT_PUBLIC_KEY = "02aa";
-const AGENT_PUBLIC_KEY = "QUJDRA==";
+const TXT_PUBLIC_KEY = "aa".repeat(32);
+const TXT_PUBLIC_KEY_TWO = "bb".repeat(32);
+const TXT_PUBLIC_KEY_THREE = "cc".repeat(32);
+const AGENT_PUBLIC_KEY = "dd".repeat(32);
 
 describe("TXT parsing", () => {
   it("parses compact posemesh:v1 records", () => {
@@ -24,10 +26,10 @@ describe("TXT parsing", () => {
 
   it("parses multiple TXT verification keys with rotation windows", () => {
     const parsed = parsePosemeshTxt(
-      `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; publicKeys=03bb,04cc; keyId=rotating-key; alg=ed25519; notBefore=2026-05-12T00:00:00.000Z; notAfter=2026-05-13T00:00:00.000Z`,
+      `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; publicKeys=${TXT_PUBLIC_KEY_TWO},${TXT_PUBLIC_KEY_THREE}; keyId=rotating-key; alg=ed25519; notBefore=2026-05-12T00:00:00.000Z; notAfter=2026-05-13T00:00:00.000Z`,
     );
 
-    assert.deepEqual(parsed.publicKeys, [TXT_PUBLIC_KEY, "03bb", "04cc"]);
+    assert.deepEqual(parsed.publicKeys, [TXT_PUBLIC_KEY, TXT_PUBLIC_KEY_TWO, TXT_PUBLIC_KEY_THREE]);
     assert.equal(parsed.verificationKeys.length, 3);
     assert.equal(parsed.verificationKeys[0]?.id, "rotating-key");
     assert.equal(parsed.verificationKeys[0]?.notBefore, "2026-05-12T00:00:00.000Z");
@@ -78,5 +80,22 @@ describe("TXT parsing", () => {
     assert.equal(result.records.length, 0);
     assert.equal(result.warnings.length, 1);
     assert.match(result.warnings[0]?.message ?? "", /hex or base64/);
+  });
+
+  it("enforces TXT parser limits", () => {
+    assert.throws(
+      () => parseTxtRecords(["v=spf1 -all", "v=spf1 -all"], { maxTxtRecords: 1 }),
+      /TXT records exceeds limit 1/,
+    );
+
+    const result = parseTxtRecords(
+      [
+        `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; capabilities=${"a".repeat(16)}`,
+      ],
+      { maxFieldValueBytes: 8 },
+    );
+
+    assert.equal(result.records.length, 0);
+    assert.match(result.warnings[0]?.message ?? "", /exceeds 8 bytes/);
   });
 });
