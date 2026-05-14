@@ -51,6 +51,8 @@ const DEFAULT_MANIFEST_MAX_BYTES = 128 * 1024;
 const DEFAULT_MANIFEST_SECURITY_MODE: ManifestSecurityMode = "strict";
 const DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_MANIFEST_MAX_TTL_MS = 24 * 60 * 60 * 1000;
+const STRICT_UTC_TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/;
 
 interface ResolvedManifestLimits {
   maxStringBytes: number;
@@ -1141,9 +1143,9 @@ function validateManifestTimestamp(
     return undefined;
   }
 
-  const parsed = new Date(value);
+  const parsed = parseStrictUtcTimestamp(value);
 
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+  if (!parsed) {
     throw discoveryError(
       "MANIFEST_REPLAY_INVALID",
       `Manifest ${field} must be a valid ISO-8601 UTC timestamp.`,
@@ -1259,8 +1261,39 @@ function parseCacheTimestamp(value: string | undefined): Date | undefined {
     return undefined;
   }
 
-  const parsed = new Date(value);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value ? parsed : undefined;
+  return parseStrictUtcTimestamp(value);
+}
+
+function parseStrictUtcTimestamp(value: string): Date | undefined {
+  const match = STRICT_UTC_TIMESTAMP_PATTERN.exec(value);
+
+  if (!match) {
+    return undefined;
+  }
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fractionalText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const millisecond = fractionalText ? Number(fractionalText.padEnd(3, "0")) : 0;
+  const parsed = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day ||
+    parsed.getUTCHours() !== hour ||
+    parsed.getUTCMinutes() !== minute ||
+    parsed.getUTCSeconds() !== second ||
+    parsed.getUTCMilliseconds() !== millisecond
+  ) {
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function readNonNegativeMillisecondsOption(value: number, field: string): number {

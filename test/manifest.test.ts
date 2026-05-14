@@ -1001,6 +1001,53 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("accepts strict UTC replay timestamps without milliseconds", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00Z",
+      expiresAt: "2026-05-12T12:00:00Z",
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(signed.body),
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.verification.status, "verified");
+    assert.equal(fetched.cache.cacheStatus, "fresh");
+    assert.equal(fetched.cache.issuedAt, "2026-05-12T00:00:00Z");
+    assert.equal(fetched.cache.expiresAt, "2026-05-12T12:00:00Z");
+  });
+
+  it("rejects replay timestamps that are not strict UTC timestamps", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00+00:00",
+      expiresAt: "2026-05-12T12:00:00Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /valid ISO-8601 UTC timestamp/,
+    );
+  });
+
   it("allows missing replay timestamps in demo mode with warnings", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({
