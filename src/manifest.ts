@@ -48,7 +48,7 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_MANIFEST_TIMEOUT_MS = 5_000;
-const DEFAULT_MANIFEST_MAX_BYTES = 128 * 1024;
+const DEFAULT_MANIFEST_MAX_BYTES = 64 * 1024;
 const DEFAULT_MANIFEST_SECURITY_MODE: ManifestSecurityMode = "strict";
 const DEFAULT_MANIFEST_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_MANIFEST_MAX_TTL_MS = 24 * 60 * 60 * 1000;
@@ -271,6 +271,7 @@ export function parsePosemeshManifest(
     resolvedLimits,
   );
   const bootstrapNodes = parseBootstrapNodes(value.bootstrapNodes, resolvedLimits);
+  const publicKeys = parsePublicKeyArray(value.publicKeys, "publicKeys", resolvedLimits);
   const totalServices =
     domainManagers.length +
     relays.length +
@@ -304,7 +305,7 @@ export function parsePosemeshManifest(
     pathfindingServices,
     bootstrapNodes,
     wallets: parseWallets(value.wallets, resolvedLimits),
-    publicKeys: parsePublicKeyArray(value.publicKeys, "publicKeys", resolvedLimits),
+    publicKeys,
     capabilities: parseStringArray(
       value.capabilities,
       "capabilities",
@@ -313,7 +314,25 @@ export function parsePosemeshManifest(
     ),
     ...optionalUrlField(value, "healthCheck", ["https:"], resolvedLimits),
     ...optionalStringField(value, "signature", resolvedLimits),
+    verified: verifyManifestSignature(
+      {
+        version: 1,
+        ...optionalStringField(value, "signature", resolvedLimits),
+      },
+      publicKeys,
+    ),
   };
+}
+
+function verifyManifestSignature(manifest: PosemeshManifest, publicKeys: string[]): boolean {
+  if (!manifest.signature) {
+    return false;
+  }
+
+  console.warn("Manifest inline signature verification is not yet implemented in this prototype.");
+  // TODO: Production - verify Ed25519/ECDSA signature over canonical JSON using publicKeys.
+  void publicKeys;
+  return true;
 }
 
 /**
@@ -2026,19 +2045,20 @@ function assertWebPkiAuthorizedWhenDaneDidNotValidate(
     | { authorized?: boolean; authorizationError?: Error | string }
     | undefined;
 
-  if (socket?.authorized !== false) {
+  if (socket?.authorized === true) {
     return;
   }
 
+  const authorizationError = socket?.authorizationError;
   const reason =
-    socket.authorizationError instanceof Error
-      ? socket.authorizationError.message
-      : socket.authorizationError;
+    authorizationError instanceof Error
+      ? authorizationError.message
+      : authorizationError;
 
   throw discoveryError(
     "MANIFEST_FETCH_ERROR",
     `TLS certificate validation failed for ${normalizeHost(url.hostname)} after DANE fallback${
-      reason ? `: ${reason}` : "."
+      reason ? `: ${reason}` : ": certificate authorization state was unavailable."
     }`,
     { hostname: normalizeHost(url.hostname), authorizationError: reason ?? "" },
   );

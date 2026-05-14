@@ -162,6 +162,11 @@ export function parsePosemeshTxt(
 
     enforceMaxBytes(byteLength(key), resolvedLimits.maxFieldNameBytes, "TXT field name");
     enforceMaxBytes(byteLength(value), resolvedLimits.maxFieldValueBytes, `TXT field ${key}`);
+
+    if (values.has(key)) {
+      throw new Error(`Duplicate posemesh TXT field: ${key}`);
+    }
+
     values.set(key, value);
   }
 

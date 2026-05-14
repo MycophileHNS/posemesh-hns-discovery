@@ -84,6 +84,17 @@ describe("TXT parsing", () => {
     assert.match(result.warnings[1]?.message ?? "", /username or password/);
   });
 
+  it("rejects duplicate compact posemesh TXT fields", () => {
+    const result = parseTxtRecords([
+      "posemesh:v1; manifest=https://example.com/one.json; manifest=https://example.com/two.json",
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
+    assert.match(result.warnings[0]?.message ?? "", /Duplicate posemesh TXT field: manifest/);
+  });
+
   it("ignores unrelated TXT records and reports parse warnings", () => {
     const result = parseTxtRecords([
       "v=spf1 -all",

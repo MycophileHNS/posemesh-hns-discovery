@@ -5,6 +5,7 @@ const resolver = new MockResolver(demoTxtRecords);
 for (const name of demoNames) {
   const result = await discoverPosemesh(name, {
     resolver,
+    manifestFetchOptions: { securityMode: "demo" },
     manifestFetcher: demoManifestFetcher,
   });
 

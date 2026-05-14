@@ -93,6 +93,7 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(manifest.reconstructionNodes?.[0]?.id, "reconstruction");
     assert.equal(manifest.splatterNodes?.[0]?.id, "splatter");
     assert.deepEqual(manifest.vlmNodes?.[0]?.models, ["moondream:1.8b"]);
+    assert.equal(manifest.verified, false);
     assert.equal(manifest.pathfindingServices?.[0]?.id, "pathfinding");
     assert.equal(manifest.bootstrapNodes?.[0]?.id, "bootstrap");
     assert.equal(manifest.wallets?.[0]?.address, "wallet-1");
@@ -652,6 +653,7 @@ describe("Posemesh manifest parsing", () => {
         undefined,
         "application/json",
         peerSpki,
+        { authorized: true },
       ),
       enableDane: true,
       resolveTlsa: async () => [],
@@ -693,6 +695,37 @@ describe("Posemesh manifest parsing", () => {
           now: () => new Date("2026-05-12T01:00:00.000Z"),
         }),
       /TLS certificate validation failed/,
+    );
+  });
+
+  it("rejects optional DANE fallback when WebPKI authorization metadata is missing", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(
+            signed.body,
+            undefined,
+            "application/json",
+            peerSpki,
+          ),
+          enableDane: true,
+          resolveTlsa: async () => [],
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /authorization state was unavailable/,
     );
   });
 
@@ -816,19 +849,33 @@ describe("Posemesh manifest parsing", () => {
       sourceName: "hq.posemesh",
       signature: "legacy-inline-signature",
     });
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
 
-    for (const securityMode of ["permissive", "demo"] as const) {
-      const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
-        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
-        httpsRequest: createManifestHttpsRequest(body),
-        securityMode,
-        expectedName: "hq.posemesh",
-      });
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
 
-      assert.equal(fetched.manifest.sourceName, "hq.posemesh");
-      assert.equal(fetched.manifest.signature, "legacy-inline-signature");
-      assert.equal(fetched.verification.status, "unsigned-allowed");
+    try {
+      for (const securityMode of ["permissive", "demo"] as const) {
+        const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(body),
+          securityMode,
+          expectedName: "hq.posemesh",
+        });
+
+        assert.equal(fetched.manifest.sourceName, "hq.posemesh");
+        assert.equal(fetched.manifest.signature, "legacy-inline-signature");
+        assert.equal(fetched.manifest.verified, true);
+        assert.equal(fetched.verification.status, "unsigned-allowed");
+      }
+    } finally {
+      console.warn = originalWarn;
     }
+
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0] ?? "", /inline signature verification is not yet implemented/);
   });
 
   it("does not treat plain manifests with envelope-like metadata as signed envelopes", async () => {

@@ -1,12 +1,13 @@
 {
   "name": "posemesh-hns-discovery",
-  "version": "0.1.0",
+  "version": "0.1.1-prototype",
   "description": "Proof-of-concept Handshake .posemesh discovery and identity resolver for Posemesh discussion.",
   "type": "module",
   "license": "MIT",
+  "author": "MycophileHNS",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MycophileHNS/posemesh-hns-discovery.git"
+    "url": "https://github.com/MycophileHNS/posemesh-hns-discovery"
   },
   "bugs": {
     "url": "https://github.com/MycophileHNS/posemesh-hns-discovery/issues"

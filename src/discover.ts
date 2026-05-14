@@ -31,6 +31,8 @@ export async function discoverPosemesh(
   name: string,
   options: DiscoverPosemeshOptions = {},
 ): Promise<NormalizedDiscoveryResult> {
+  // Callers that resolve names in loops should add application-level rate limiting
+  // and caching around this function, especially when using live Handshake resolvers.
   const normalizedName = assertValidPosemeshName(name);
   logDebug(options.logger, "Starting Posemesh discovery", { name: normalizedName }, options.redaction);
   const resolver =

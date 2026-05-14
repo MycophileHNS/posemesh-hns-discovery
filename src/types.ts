@@ -128,6 +128,7 @@ export interface PosemeshManifest {
   capabilities?: string[];
   healthCheck?: string;
   signature?: string;
+  verified?: boolean;
 }
 
 export interface PosemeshDiscoveryRecord {

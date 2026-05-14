@@ -1,8 +1,17 @@
 # posemesh-hns-discovery
 
+**Status**: Unofficial prototype - polished and ready for Auki technical review and feedback.
+
 `posemesh-hns-discovery` is an unofficial proof of concept that shows how Handshake names could help Posemesh clients, tools, robots, and agents discover Auki/Posemesh services without depending on one central directory.
 
 This is not official Auki software. It is not endorsed by Auki Labs. It is not a production Posemesh SDK fork. It is a small discussion prototype.
+
+## Known Limitations (Prototype)
+
+- Legacy inline `manifest.signature` verification is stubbed; strict signed-envelope verification exists separately
+- Relies on external Handshake resolvers, so resolver trust policy still matters
+- Demo manifests are unsigned mock data
+- No built-in rate limiter or persistent client cache yet
 
 ## Five-minute summary
 
