@@ -395,6 +395,10 @@ function parseHttpsUrl(value: string, field: string): string {
     throw new Error(`TXT field ${field} must use https.`);
   }
 
+  if (parsed.username || parsed.password) {
+    throw new Error(`TXT field ${field} must not include username or password.`);
+  }
+
   return value;
 }
 

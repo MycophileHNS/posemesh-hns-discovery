@@ -71,6 +71,19 @@ describe("TXT parsing", () => {
     assert.match(result.warnings[0]?.message ?? "", /https/);
   });
 
+  it("rejects TXT URLs that include username or password", () => {
+    const result = parseTxtRecords([
+      "posemesh:v1; manifest=https://user:pass@example.com/posemesh.json",
+      "agent-identity:v1={\"version\":1,\"endpoint\":\"https://user:pass@example.com/agent.json\",\"capabilities\":[\"domain-discovery\"]}",
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 2);
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
+    assert.match(result.warnings[0]?.message ?? "", /username or password/);
+    assert.match(result.warnings[1]?.message ?? "", /username or password/);
+  });
+
   it("ignores unrelated TXT records and reports parse warnings", () => {
     const result = parseTxtRecords([
       "v=spf1 -all",

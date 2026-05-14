@@ -232,7 +232,7 @@ Available resolver strategies:
 
 - `MockResolver`: deterministic local demo data.
 - `DnsResolver`: Node DNS resolver, optionally configured with a DNS server.
-- `DohResolver`: DNS-over-HTTPS resolver using native `fetch`.
+- `DohResolver`: DNS-over-HTTPS resolver using native `fetch`. Its default endpoint is Cloudflare's conventional DNS service, so live `.posemesh` lookups require configuring a Handshake-aware DoH endpoint or another Handshake-aware resolver.
 - `DotResolver`: explicit DNS-over-TLS prototype stub.
 - `CompositeResolver`: combines multiple resolvers with `first-success`, `quorum`, or `strict-consensus`.
 
@@ -244,6 +244,7 @@ The safest production direction would be:
 
 - use only `.posemesh` subnames controlled or delegated by Auki
 - use `strict` security mode for live manifest fetching
+- set `requireManifest: true` for callers that must fail closed instead of returning TXT-only fallback data
 - require signed manifest envelopes
 - anchor signing keys in TXT records or an Auki-controlled trust store
 - require `sourceName`, `manifestUrl`, `issuedAt`, and `expiresAt` in signed payloads
@@ -322,6 +323,7 @@ Warnings and thrown `DiscoveryError` objects include stable `code` values. Calle
 | `MANIFEST_URL_UNSAFE` | The manifest host is localhost, private, link-local, multicast, documentation, reserved, or mixed public/private. |
 | `MANIFEST_HTTP_ERROR` | The manifest server returned a non-2xx HTTP status. |
 | `MANIFEST_REDIRECT_REJECTED` | The manifest server returned a redirect, which this prototype rejects. |
+| `MANIFEST_FETCH_ERROR` | Manifest fetching failed or `requireManifest` could not accept a TXT-only fallback. |
 | `MANIFEST_CONTENT_TYPE_INVALID` | The manifest response did not use `Content-Type: application/json`. |
 | `MANIFEST_TOO_LARGE` | The manifest response exceeded the configured byte limit. |
 | `MANIFEST_TIMEOUT` | The manifest fetch exceeded the configured timeout. |
@@ -349,13 +351,20 @@ See [`SECURITY.md`](SECURITY.md) for disclosure guidance and known limitations.
 
 ## Run the demo
 
-This project can run on recent Node.js versions that support built-in TypeScript transforms. No live DNS records are required for the default demo.
+The packaged library targets Node.js 22.6+. The source-level npm scripts use Node's experimental TypeScript transform support, so use a current Node 22 release for `npm test`, `npm run demo`, and `npm run resolve`. No live DNS records are required for the default demo.
 
 ```bash
 npm ci
 npm run typecheck
-npm test
 npm run build
+node dist/cli.js demo
+node dist/cli.js resolve hq.posemesh
+```
+
+With a current Node 22 release, reviewers can also run the source scripts and package checks:
+
+```bash
+npm test
 npm run audit:security
 npm run pack:dry-run
 npm run demo
@@ -408,6 +417,7 @@ const resolver = new CompositeResolver(
 const result = await discoverPosemesh("hq.posemesh", {
   resolver,
   tlsaResolver: resolver,
+  requireManifest: true,
   manifestFetchOptions: {
     securityMode: "strict",
     trustedKeys,

@@ -397,6 +397,12 @@ export interface DiscoverPosemeshOptions {
   dnsServer?: string;
   parserLimits?: ParserLimits;
   fetchManifest?: boolean;
+  /**
+   * Fail closed unless an unambiguous manifest is fetched and accepted.
+   * Keep this false for demos; set true for production-style callers that do
+   * not want silent TXT-only downgrade when manifest discovery fails.
+   */
+  requireManifest?: boolean;
   manifestFetchOptions?: FetchPosemeshManifestOptions;
   manifestFetcher?: ManifestFetcher;
   now?: () => Date;

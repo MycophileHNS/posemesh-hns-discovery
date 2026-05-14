@@ -66,6 +66,23 @@ export async function discoverPosemesh(
   const warnings = [...parsedTxt.warnings];
   appendDiscoveryRecordWarning(normalizedName, txtRecords, parsedTxt.records, warnings);
   const manifestUrl = selectManifestUrl(parsedTxt.records, warnings);
+
+  if (options.requireManifest && !shouldFetchManifest) {
+    throw discoveryError(
+      "MANIFEST_FETCH_ERROR",
+      `Discovery for ${normalizedName} requires a manifest, but manifest fetching is disabled.`,
+      { name: normalizedName },
+    );
+  }
+
+  if (options.requireManifest && !manifestUrl) {
+    throw discoveryError(
+      "MANIFEST_FETCH_ERROR",
+      `Discovery for ${normalizedName} requires an unambiguous posemesh:v1 manifest URL.`,
+      { name: normalizedName },
+    );
+  }
+
   const manifestFetchOptions = createManifestFetchOptions(
     normalizedName,
     manifestUrl,
@@ -99,6 +116,14 @@ export async function discoverPosemesh(
       const identityWarning = validateManifestIdentity(normalizedName, manifest, manifestUrl);
 
       if (identityWarning) {
+        if (options.requireManifest) {
+          throw discoveryError(
+            identityWarning.code ?? "MANIFEST_BINDING_MISMATCH",
+            identityWarning.message,
+            { name: normalizedName, url: manifestUrl },
+          );
+        }
+
         warnings.push(identityWarning);
         manifest = undefined;
         manifestVerification = undefined;
@@ -106,6 +131,28 @@ export async function discoverPosemesh(
         manifestDane = undefined;
       }
     } catch (error) {
+      if (options.requireManifest) {
+        logError(
+          options.logger,
+          "Required manifest discovery failed",
+          {
+            name: normalizedName,
+            url: manifestUrl,
+            ...errorLogFields(error, "MANIFEST_FETCH_ERROR"),
+          },
+          options.redaction,
+        );
+        throw discoveryError(
+          getErrorCode(error, "MANIFEST_FETCH_ERROR"),
+          `Required manifest discovery failed for ${normalizedName}: ${getErrorMessage(
+            error,
+            "Unknown manifest fetch error.",
+          )}`,
+          { name: normalizedName, url: manifestUrl },
+          error,
+        );
+      }
+
       const warning = createWarning({
         source: "manifest",
         url: manifestUrl,

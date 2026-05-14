@@ -309,6 +309,29 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings[0]?.code, "MANIFEST_FETCH_ERROR");
   });
 
+  it("fails closed when requireManifest is set and manifest fetching fails", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": [
+              `posemesh:v1; manifest=https://example.com/missing.json; publicKey=${TXT_KEY}; capabilities=domain-discovery`,
+            ],
+          }),
+          requireManifest: true,
+          manifestFetcher: async () => {
+            throw new Error("demo fetch failed");
+          },
+          now: () => fixedNow,
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_FETCH_ERROR");
+        assert.match((error as Error).message, /Required manifest discovery failed/);
+        return true;
+      },
+    );
+  });
+
   it("surfaces demo-mode unsigned manifest warnings in normalized discovery", async () => {
     const result = await discoverPosemesh("hq.posemesh", {
       resolver: new MockResolver({
@@ -368,6 +391,23 @@ describe("discoverPosemesh", () => {
     assert.match(result.warnings[0]?.message ?? "", /Multiple distinct manifest URLs/);
   });
 
+  it("fails closed when requireManifest is set and no unambiguous manifest URL exists", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": [
+              "posemesh:v1; manifest=https://example.com/one.json",
+              "posemesh:v1; manifest=https://example.com/two.json",
+            ],
+          }),
+          requireManifest: true,
+          now: () => fixedNow,
+        }),
+      /requires an unambiguous posemesh:v1 manifest URL/,
+    );
+  });
+
   it("keeps agent identity endpoints separate from manifest URLs", async () => {
     let fetchCalls = 0;
 
@@ -409,6 +449,28 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /does not match/);
+  });
+
+  it("fails closed when requireManifest is set and manifest identity does not match", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+          }),
+          requireManifest: true,
+          manifestFetcher: async () => ({
+            version: 1,
+            sourceName: "mismatch.posemesh",
+          }),
+          now: () => fixedNow,
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_BINDING_MISMATCH");
+        assert.match((error as Error).message, /Required manifest discovery failed/);
+        return true;
+      },
+    );
   });
 
   it("drops fetched manifest data when sourceName is missing", async () => {

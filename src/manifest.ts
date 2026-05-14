@@ -1428,6 +1428,14 @@ async function assertSafeManifestUrl(
     );
   }
 
+  if (parsed.username || parsed.password) {
+    throw discoveryError(
+      "MANIFEST_URL_INVALID",
+      "Manifest URL must not include username or password.",
+      { url },
+    );
+  }
+
   const addresses = await assertPublicManifestHost(parsed.hostname, resolveHostname);
   return { url: parsed, addresses };
 }
@@ -1449,6 +1457,10 @@ function validateUrl(
 
   if (!isAllowedProtocol(parsed.protocol, protocols)) {
     throw new Error(`Manifest field ${field} must use ${protocols.join(" or ")}.`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error(`Manifest field ${field} must not include username or password.`);
   }
 
   return url;

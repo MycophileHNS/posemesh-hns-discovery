@@ -205,12 +205,35 @@ describe("Posemesh manifest parsing", () => {
       /localhost|private|reserved/,
     );
 
+    await assert.rejects(
+      () => fetchPosemeshManifest("https://user:pass@example.com/posemesh.json"),
+      /username or password/,
+    );
+
+    assert.throws(
+      () =>
+        parsePosemeshManifest({
+          version: 1,
+          manifestUrl: "https://user:pass@example.com/posemesh.json",
+        }),
+      /username or password/,
+    );
+
     assert.throws(
       () => parsePosemeshManifest({
         version: 1,
         relays: [{ endpoint: "http://relay.example.com" }],
       }),
       /relays\.endpoint/,
+    );
+
+    assert.throws(
+      () =>
+        parsePosemeshManifest({
+          version: 1,
+          relays: [{ endpoint: "https://user:pass@relay.example.com" }],
+        }),
+      /username or password/,
     );
   });
 
