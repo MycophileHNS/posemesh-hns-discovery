@@ -382,6 +382,56 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("preserves specific manifest failure codes across address attempts", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifest(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body, undefined, "text/plain"),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_CONTENT_TYPE_INVALID");
+        assert.ok((error as Error).cause instanceof Error);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifest(manifestUrl, {
+          resolveHostname: async () => [
+            { address: "93.184.216.34", family: 4 },
+            { address: "93.184.216.35", family: 4 },
+          ],
+          httpsRequest: createManifestHttpsRequest(signed.body, undefined, "text/plain"),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_CONTENT_TYPE_INVALID");
+        assert.ok((error as Error).cause instanceof AggregateError);
+        assert.deepEqual(
+          (error as { details?: { failureCodes?: string[] } }).details?.failureCodes,
+          ["MANIFEST_CONTENT_TYPE_INVALID"],
+        );
+        return true;
+      },
+    );
+  });
+
   it("allows missing Content-Type only when explicitly configured", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({

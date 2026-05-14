@@ -101,6 +101,13 @@ interface ManifestFetchTextResult {
   warnings?: ParseWarning[];
 }
 
+interface ManifestAddressFetchFailure {
+  address: string;
+  code: DiscoveryErrorCode;
+  message: string;
+  error: unknown;
+}
+
 type ManifestLookupFunction = NonNullable<Parameters<ManifestHttpsRequest>[0]["lookup"]>;
 
 interface NormalizedTlsaRecord {
@@ -1776,7 +1783,7 @@ async function tryManifestAddresses(
   policy: ManifestFetchPolicy,
 ): Promise<ManifestFetchTextResult> {
   // Try resolved addresses one at a time so a dead address does not fail the whole manifest.
-  const errors: string[] = [];
+  const failures: ManifestAddressFetchFailure[] = [];
 
   for (const address of addresses) {
     try {
@@ -1788,6 +1795,7 @@ async function tryManifestAddresses(
       );
       return await fetchManifestTextFromAddress(url, address, policy);
     } catch (error) {
+      const code = getErrorCode(error, "MANIFEST_FETCH_ERROR");
       const message = getErrorMessage(error, "Unknown manifest fetch error.");
       logWarn(
         policy.logger,
@@ -1799,14 +1807,50 @@ async function tryManifestAddresses(
         },
         policy.redaction,
       );
-      errors.push(`${address.address}: ${message}`);
+      failures.push({
+        address: address.address,
+        code,
+        message,
+        error,
+      });
     }
   }
 
-  throw discoveryError(
-    "MANIFEST_FETCH_ERROR",
-    `Manifest fetch failed for ${url.toString()} using ${addresses.length} resolved address(es): ${errors.join("; ")}`,
-    { url: url.toString(), addressCount: addresses.length },
+  throw createManifestAddressFailureError(url, addresses.length, failures);
+}
+
+function createManifestAddressFailureError(
+  url: URL,
+  addressCount: number,
+  failures: ManifestAddressFetchFailure[],
+): Error {
+  const failureMessages = failures.map((failure) => `${failure.address}: ${failure.message}`);
+  const uniqueCodes = [...new Set(failures.map((failure) => failure.code))];
+  const code =
+    uniqueCodes.length === 1 && uniqueCodes[0] ? uniqueCodes[0] : "MANIFEST_FETCH_ERROR";
+  const cause =
+    failures.length === 1
+      ? failures[0]?.error
+      : new AggregateError(
+          failures.map((failure) => failure.error),
+          `Manifest fetch failed for all resolved addresses with ${code}.`,
+        );
+
+  return discoveryError(
+    code,
+    `Manifest fetch failed for ${url.toString()} using ${addressCount} resolved address(es): ${failureMessages.join("; ")}`,
+    {
+      url: url.toString(),
+      addressCount,
+      failureCount: failures.length,
+      failureCodes: uniqueCodes,
+      failures: failures.map((failure) => ({
+        address: failure.address,
+        code: failure.code,
+        message: failure.message,
+      })),
+    },
+    cause,
   );
 }
 
