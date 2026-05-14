@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { discoverPosemesh } from "../src/discover.ts";
 import { MockResolver } from "../src/resolvers.ts";
-import type { PosemeshManifest } from "../src/types.ts";
+import type { ManifestTlsaRecord, PosemeshManifest, TxtResolver } from "../src/types.ts";
 
 const fixedNow = new Date("2026-05-11T00:00:00.000Z");
 const TXT_KEY = "aa".repeat(32);
@@ -173,7 +173,7 @@ describe("discoverPosemesh", () => {
     let receivedOptions: unknown;
 
     await discoverPosemesh("hq.posemesh", {
-      resolver: new MockResolver({
+      resolver: createTxtOnlyResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
       manifestFetchOptions,
@@ -192,12 +192,55 @@ describe("discoverPosemesh", () => {
     });
   });
 
+  it("reuses the selected resolver for TLSA manifest fetch options", async () => {
+    const tlsaRecord = {
+      certUsage: 3,
+      selector: 1,
+      matchingType: 1,
+      data: "abcd",
+    };
+    const resolver = new MockResolver(
+      {
+        "hq.posemesh": ["posemesh:v1; manifest=https://manifest.example.test/posemesh.json"],
+      },
+      {
+        tlsaRecords: {
+          "_443._tcp.manifest.example.test": [tlsaRecord],
+        },
+      },
+    );
+    let resolvedTlsa: ManifestTlsaRecord[] | undefined;
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver,
+      manifestFetchOptions: {
+        enableDane: true,
+        requireTlsa: true,
+      },
+      manifestFetcher: async (_url, options) => {
+        const resolveTlsa = options?.resolveTlsa;
+        assert.equal(typeof resolveTlsa, "function");
+        if (!resolveTlsa) {
+          throw new Error("Expected derived TLSA resolver.");
+        }
+        resolvedTlsa = await resolveTlsa("manifest.example.test", 443);
+        return {
+          version: 1,
+          sourceName: "hq.posemesh",
+        };
+      },
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(resolvedTlsa, [tlsaRecord]);
+  });
+
   it("anchors manifest verification keys from posemesh TXT records", async () => {
     const txtPublicKey = Buffer.alloc(32, 1).toString("base64");
     let receivedOptions: unknown;
 
     await discoverPosemesh("hq.posemesh", {
-      resolver: new MockResolver({
+      resolver: createTxtOnlyResolver({
         "hq.posemesh": [
           `posemesh:v1; manifest=https://example.com/hq.json; alg=ed25519; keyId=hq-key; publicKey=${txtPublicKey}`,
         ],
@@ -463,4 +506,12 @@ function createManifestHttpsRequest(body: string) {
 
     return req;
   }) as NonNullable<import("../src/types.ts").FetchPosemeshManifestOptions["httpsRequest"]>;
+}
+
+function createTxtOnlyResolver(records: Record<string, string[]>): TxtResolver {
+  const resolver = new MockResolver(records);
+
+  return {
+    resolveTxt: (name: string) => resolver.resolveTxt(name),
+  };
 }

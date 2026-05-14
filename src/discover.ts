@@ -71,7 +71,7 @@ export async function discoverPosemesh(
     manifestUrl,
     parsedTxt.records,
     options.manifestFetchOptions,
-    options.tlsaResolver,
+    options.tlsaResolver ?? tlsaResolverFromSelectedResolver(resolver),
     options.logger,
     options.redaction,
   );
@@ -230,6 +230,14 @@ function createManifestFetchOptions(
   return fetchOptions;
 }
 
+function tlsaResolverFromSelectedResolver(resolver: unknown): TlsaResolver | undefined {
+  if (!isRecord(resolver) || typeof resolver.resolveTlsa !== "function") {
+    return undefined;
+  }
+
+  return resolver as unknown as TlsaResolver;
+}
+
 function collectManifestVerificationKeys(
   records: ReturnType<typeof parseTxtRecords>["records"],
 ): ManifestVerificationKey[] {
@@ -358,4 +366,8 @@ function collectServiceEndpoints(manifest: PosemeshManifest | undefined): Poseme
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
