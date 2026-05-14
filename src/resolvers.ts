@@ -965,6 +965,14 @@ function canonicalizeRecord(value: unknown): string {
 }
 
 function stableRecordValue(value: unknown): unknown {
+  if (value instanceof ArrayBuffer) {
+    return stableBinaryValue(new Uint8Array(value));
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    return stableBinaryValue(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+
   if (Array.isArray(value)) {
     return value.map(stableRecordValue);
   }
@@ -978,6 +986,13 @@ function stableRecordValue(value: unknown): unknown {
   }
 
   return value;
+}
+
+function stableBinaryValue(bytes: Uint8Array): { type: "binary"; hex: string } {
+  return {
+    type: "binary",
+    hex: Buffer.from(bytes).toString("hex"),
+  };
 }
 
 function getResolverName(resolver: object, index: number): string {

@@ -189,6 +189,32 @@ describe("CompositeResolver", () => {
     assert.equal(detailed.status, "ok");
     assert.deepEqual(detailed.records, [firstRecord, secondRecord]);
   });
+
+  it("compares ArrayBuffer TLSA association data by bytes for consensus", async () => {
+    const firstRecord = {
+      certUsage: 3,
+      selector: 1,
+      matchingType: 1,
+      data: Uint8Array.from([0xab, 0xcd]).buffer,
+    };
+    const secondRecord = {
+      certUsage: 3,
+      selector: 1,
+      matchingType: 1,
+      data: Uint8Array.from([0xef, 0x01]).buffer,
+    };
+    const resolver = new CompositeResolver(
+      [
+        new MockResolver({}, { name: "one", tlsaRecords: { "_443._tcp.host.test": [firstRecord] } }),
+        new MockResolver({}, { name: "two", tlsaRecords: { "_443._tcp.host.test": [secondRecord] } }),
+      ],
+      { strategy: "strict-consensus" },
+    );
+
+    const detailed = await resolver.resolveTlsaDetailed("host.test", 443);
+
+    assert.equal(detailed.status, "consensus-failed");
+  });
 });
 
 describe("DohResolver", () => {
