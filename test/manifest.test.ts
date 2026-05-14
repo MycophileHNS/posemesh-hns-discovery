@@ -853,6 +853,35 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("reports verified payload schema failures as schema errors", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+      relays: {} as unknown as NonNullable<PosemeshManifest["relays"]>,
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_SCHEMA_INVALID");
+        assert.match((error as Error).message, /schema invalid/i);
+        assert.doesNotMatch((error as Error).message, /signature/i);
+        return true;
+      },
+    );
+  });
+
   it("allows invalid signed envelopes in demo mode with a warning", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({

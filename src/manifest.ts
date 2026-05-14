@@ -406,10 +406,11 @@ function parseStrictFetchedManifest(
   try {
     return parseVerifiedFetchedManifest(text, manifestUrl, options, now, true);
   } catch (error) {
-    const message = getErrorMessage(error, "Unknown signature error.");
+    const code = getErrorCode(error, "MANIFEST_SIGNATURE_INVALID");
+    const message = getErrorMessage(error, "Unknown manifest verification error.");
     throw discoveryError(
-      getErrorCode(error, "MANIFEST_SIGNATURE_INVALID"),
-      `Strict manifest verification failed: ${message}`,
+      code,
+      `${strictManifestFailurePrefix(code)}: ${message}`,
       { url: manifestUrl },
       error,
     );
@@ -438,9 +439,10 @@ function parseVerifiedFetchedManifest(
     ...(options.logger ? { logger: options.logger } : {}),
     ...(options.redaction ? { redaction: options.redaction } : {}),
   });
-  const manifest = parsePosemeshManifest(
-    JSON.parse(verifiedEnvelope.payloadText) as unknown,
-    options.manifestLimits,
+  const manifest = parseVerifiedManifestPayload(
+    verifiedEnvelope.payloadText,
+    manifestUrl,
+    options,
   );
 
   return createFetchedManifestResult(
@@ -451,6 +453,54 @@ function parseVerifiedFetchedManifest(
     now,
     requireSignedClaims ? "strict-signed" : "demo-signed",
   );
+}
+
+function strictManifestFailurePrefix(code: DiscoveryErrorCode): string {
+  if (
+    code === "MANIFEST_SIGNATURE_REQUIRED" ||
+    code === "MANIFEST_SIGNATURE_INVALID" ||
+    code === "MANIFEST_KEY_REQUIRED" ||
+    code === "MANIFEST_KEY_INACTIVE"
+  ) {
+    return "Strict manifest verification failed";
+  }
+
+  return "Strict manifest validation failed";
+}
+
+function parseVerifiedManifestPayload(
+  payloadText: string,
+  manifestUrl: string,
+  options: FetchPosemeshManifestOptions,
+): PosemeshManifest {
+  let payload: unknown;
+
+  try {
+    payload = JSON.parse(payloadText) as unknown;
+  } catch (error) {
+    throw discoveryError(
+      "MANIFEST_PARSE_ERROR",
+      `Signed manifest payload for ${manifestUrl} was not valid JSON.`,
+      { url: manifestUrl },
+      error,
+    );
+  }
+
+  try {
+    return parsePosemeshManifest(payload, options.manifestLimits);
+  } catch (error) {
+    const code = getErrorCode(error, "MANIFEST_SCHEMA_INVALID");
+    const message = getErrorMessage(error, "Signed manifest payload schema was invalid.");
+
+    throw discoveryError(
+      code,
+      code === "MANIFEST_SCHEMA_INVALID"
+        ? `Signed manifest payload schema invalid: ${message}`
+        : message,
+      { url: manifestUrl },
+      error,
+    );
+  }
 }
 
 function parseDemoInvalidSignedManifest(
