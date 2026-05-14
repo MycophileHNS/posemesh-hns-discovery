@@ -455,7 +455,9 @@ describe("Posemesh manifest parsing", () => {
       resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
       httpsRequest: createManifestHttpsRequest(
         signed.body,
-        undefined,
+        (options) => {
+          assert.equal(options.rejectUnauthorized, false);
+        },
         "application/json",
         peerSpki,
       ),
@@ -481,6 +483,44 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(fetched.dane?.status, "validated");
     assert.equal(fetched.dane?.recordName, "_443._tcp.manifest.example.test");
     assert.equal(fetched.dane?.matchedRecord?.selector, 1);
+  });
+
+  it("lets required DANE validate before WebPKI certificate rejection", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-only-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+      resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      httpsRequest: createManifestHttpsRequest(
+        signed.body,
+        (options) => {
+          assert.equal(options.rejectUnauthorized, false);
+        },
+        "application/json",
+        peerSpki,
+      ),
+      requireTlsa: true,
+      resolveTlsa: async () => [
+        {
+          certUsage: 3,
+          selector: 1,
+          matchingType: 1,
+          data: createHash("sha256").update(peerSpki).digest(),
+        },
+      ],
+      trustedKeys: [signed.trustedKey],
+      expectedName: "hq.posemesh",
+      now: () => new Date("2026-05-12T01:00:00.000Z"),
+    });
+
+    assert.equal(fetched.dane?.status, "validated");
   });
 
   it("rejects TLSA certUsage values outside the prototype DANE-EE subset", async () => {
@@ -549,6 +589,38 @@ describe("Posemesh manifest parsing", () => {
 
     assert.equal(fetched.dane?.status, "no-records");
     assert.match(fetched.warnings?.[0]?.message ?? "", /No TLSA records/);
+  });
+
+  it("requires WebPKI authorization when optional DANE falls back", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(
+            signed.body,
+            undefined,
+            "application/json",
+            peerSpki,
+            { authorized: false, authorizationError: "self-signed certificate" },
+          ),
+          enableDane: true,
+          resolveTlsa: async () => [],
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /TLS certificate validation failed/,
+    );
   });
 
   it("fails closed when requireTlsa is enabled and no TLSA records exist", async () => {
@@ -1079,6 +1151,7 @@ function createManifestHttpsRequest(
   onRequest?: (options: RequestOptions) => void,
   contentType: string | null = "application/json; charset=utf-8",
   peerCertificatePubkey?: Buffer,
+  tlsAuthorization?: { authorized?: boolean; authorizationError?: string },
 ): NonNullable<FetchPosemeshManifestOptions["httpsRequest"]> {
   return ((options: RequestOptions, callback?: (response: IncomingMessage) => void) => {
     const req = new EventEmitter() as ClientRequest;
@@ -1109,12 +1182,16 @@ function createManifestHttpsRequest(
         response.headers["content-type"] = contentType;
       }
 
-      if (peerCertificatePubkey) {
+      if (peerCertificatePubkey || tlsAuthorization) {
         Object.defineProperty(response, "socket", {
           value: {
-            getPeerCertificate: () => ({
-              pubkey: peerCertificatePubkey,
-            }),
+            ...tlsAuthorization,
+            getPeerCertificate: () =>
+              peerCertificatePubkey
+                ? {
+                    pubkey: peerCertificatePubkey,
+                  }
+                : null,
           },
         });
       }

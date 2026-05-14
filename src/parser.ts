@@ -1,4 +1,4 @@
-import { parsePublicKey } from "./public-keys.ts";
+import { decodePublicKey, parsePublicKey } from "./public-keys.ts";
 import { parseManifestSignatureAlgorithm } from "./security.ts";
 import { createWarning, getErrorCode, getErrorMessage, logDebug, logWarn } from "./observability.ts";
 import type {
@@ -249,22 +249,27 @@ export function parseAgentIdentityTxt(
 
 function createVerificationKeys(
   publicKeys: string[],
-  algorithm: ManifestSignatureAlgorithm,
+  algorithm: ManifestSignatureAlgorithm | undefined,
   keyId: string | undefined,
   validity: Pick<ManifestVerificationKey, "notBefore" | "notAfter">,
 ): ManifestVerificationKey[] {
   return publicKeys.map((publicKey) => ({
     ...(keyId ? { id: keyId } : {}),
-    algorithm,
+    algorithm: algorithm ?? inferLegacyTxtKeyAlgorithm(publicKey),
     publicKey,
     source: "txt",
     ...validity,
   }));
 }
 
-function parseOptionalAlgorithm(value: string | undefined): ManifestSignatureAlgorithm {
+function inferLegacyTxtKeyAlgorithm(publicKey: string): ManifestSignatureAlgorithm {
+  const bytes = decodePublicKey(publicKey, "TXT public key");
+  return bytes.byteLength === 32 ? "ed25519" : "ecdsa-p256-sha256";
+}
+
+function parseOptionalAlgorithm(value: string | undefined): ManifestSignatureAlgorithm | undefined {
   if (!value) {
-    return "ed25519";
+    return undefined;
   }
 
   return parseManifestSignatureAlgorithm(value, "TXT field alg");

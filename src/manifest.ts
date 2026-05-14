@@ -1771,6 +1771,7 @@ function fetchManifestTextFromAddress(
           accept: "application/json",
           host: url.host,
         },
+        ...(shouldBypassWebPkiForDane(policy) ? { rejectUnauthorized: false } : {}),
         servername: isIP(normalizeHost(url.hostname)) ? undefined : url.hostname,
         lookup: createPinnedAddressLookup(address),
       },
@@ -1804,6 +1805,7 @@ function fetchManifestTextFromAddress(
         try {
           assertTlsSpkiPin(url, response, policy.tlsPins);
           const daneResult = await validateManifestDane(url, response, policy);
+          assertWebPkiAuthorizedWhenDaneDidNotValidate(url, response, policy, daneResult.dane);
           dane = daneResult.dane;
           daneWarnings = daneResult.warnings;
         } catch (error) {
@@ -1895,6 +1897,45 @@ function createPinnedAddressLookup(address: ManifestResolvedAddress): ManifestLo
 
     callback(null, address.address, address.family);
   };
+}
+
+function shouldBypassWebPkiForDane(policy: ManifestFetchPolicy): boolean {
+  // DANE has to see the peer certificate before Node rejects non-WebPKI chains.
+  // If DANE does not validate, assertWebPkiAuthorizedWhenDaneDidNotValidate
+  // preserves the normal TLS fallback behavior.
+  return policy.enableDane || policy.requireTlsa;
+}
+
+function assertWebPkiAuthorizedWhenDaneDidNotValidate(
+  url: URL,
+  response: { socket?: unknown },
+  policy: ManifestFetchPolicy,
+  dane: ManifestDaneMetadata | undefined,
+): void {
+  if (!shouldBypassWebPkiForDane(policy) || dane?.status === "validated") {
+    return;
+  }
+
+  const socket = response.socket as
+    | { authorized?: boolean; authorizationError?: Error | string }
+    | undefined;
+
+  if (socket?.authorized !== false) {
+    return;
+  }
+
+  const reason =
+    socket.authorizationError instanceof Error
+      ? socket.authorizationError.message
+      : socket.authorizationError;
+
+  throw discoveryError(
+    "MANIFEST_FETCH_ERROR",
+    `TLS certificate validation failed for ${normalizeHost(url.hostname)} after DANE fallback${
+      reason ? `: ${reason}` : "."
+    }`,
+    { hostname: normalizeHost(url.hostname), authorizationError: reason ?? "" },
+  );
 }
 
 function assertTlsSpkiPin(

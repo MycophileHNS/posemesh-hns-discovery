@@ -22,7 +22,18 @@ describe("TXT parsing", () => {
     assert.equal(parsed.version, 1);
     assert.equal(parsed.manifestUrl, "https://example.com/posemesh.json");
     assert.deepEqual(parsed.publicKeys, [TXT_PUBLIC_KEY]);
+    assert.equal(parsed.verificationKeys[0]?.algorithm, "ed25519");
     assert.deepEqual(parsed.capabilities, ["domain-discovery", "relay-discovery"]);
+  });
+
+  it("preserves legacy P-256 TXT keys when alg is omitted", () => {
+    const { publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const publicKeyBytes = publicKey.export({ format: "der", type: "spki" });
+    const encodedPublicKey = Buffer.from(publicKeyBytes).toString("base64url");
+    const parsed = parsePosemeshTxt(`posemesh:v1; publicKey=${encodedPublicKey}`);
+
+    assert.deepEqual(parsed.publicKeys, [encodedPublicKey]);
+    assert.equal(parsed.verificationKeys[0]?.algorithm, "ecdsa-p256-sha256");
   });
 
   it("parses multiple TXT verification keys with rotation windows", () => {
