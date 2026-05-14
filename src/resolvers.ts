@@ -406,12 +406,25 @@ export class DohResolver implements TxtResolver, TlsaResolver {
       });
     }
 
-    return createDetailedResult({
-      name: result.name,
-      type: "TLSA",
-      resolver: result.resolver ?? this.name,
-      records: result.records.map(parseDohTlsaAnswerData),
-    });
+    try {
+      return createDetailedResult({
+        name: result.name,
+        type: "TLSA",
+        resolver: result.resolver ?? this.name,
+        records: result.records.map(parseDohTlsaAnswerData),
+      });
+    } catch (error) {
+      const message = getErrorMessage(error, "Unknown DoH TLSA parse error.");
+      return createDetailedResult({
+        name: result.name,
+        type: "TLSA",
+        resolver: result.resolver ?? this.name,
+        status: "lookup-error",
+        code: "RESOLVER_LOOKUP_ERROR",
+        records: [],
+        error: `DoH TLSA answer parsing failed for ${result.name}: ${message}`,
+      });
+    }
   }
 
   private async queryDoh(

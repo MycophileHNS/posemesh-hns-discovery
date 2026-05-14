@@ -2012,8 +2012,11 @@ function normalizeTlsaRecord(record: ManifestTlsaRecord): NormalizedTlsaRecord {
   const matchingType = record.matchingType ?? record.match;
   const data = record.certificateAssociationData ?? record.data;
 
-  if (!Number.isInteger(record.certUsage) || record.certUsage < 0 || record.certUsage > 3) {
-    throw discoveryError("DANE_TLSA_LOOKUP_ERROR", "TLSA certUsage must be 0, 1, 2, or 3.");
+  if (record.certUsage !== 3) {
+    throw discoveryError(
+      "DANE_TLSA_LOOKUP_ERROR",
+      "This prototype only supports TLSA certUsage 3 (DANE-EE).",
+    );
   }
 
   if (record.selector !== 0 && record.selector !== 1) {
@@ -2113,8 +2116,7 @@ function findMatchingTlsaRecord(
   certificates: PeerCertificate[],
 ): NormalizedTlsaRecord | undefined {
   return records.find((record) => {
-    const candidateCertificates =
-      record.certUsage === 0 || record.certUsage === 2 ? certificates : certificates.slice(0, 1);
+    const candidateCertificates = certificates.slice(0, 1);
 
     return candidateCertificates.some((certificate) => doesTlsaRecordMatchCertificate(record, certificate));
   });

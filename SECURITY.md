@@ -36,7 +36,7 @@ Useful report details include:
 - The manifest schema is not an official Auki schema.
 - Demo mode intentionally accepts unsigned or invalid signed manifests with warnings.
 - Permissive mode accepts unsigned manifests and is not a production trust mode.
-- DANE TLSA validation is opt-in and requires a Handshake-aware TLSA resolver for real `.posemesh` deployments.
+- DANE TLSA validation is opt-in, currently supports only DANE-EE (`certUsage` 3), and requires a Handshake-aware TLSA resolver for real `.posemesh` deployments.
 - DNS-over-TLS is currently an explicit prototype stub.
 - The core library reports cache policy metadata but does not implement a persistent client cache.
 - Resolver consensus can reduce disagreement risk, but it does not replace a trusted resolver policy.

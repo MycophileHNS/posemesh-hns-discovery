@@ -99,6 +99,18 @@ describe("TXT parsing", () => {
     assert.match(result.warnings[0]?.message ?? "", /P-256/);
   });
 
+  it("rejects invalid raw P-256 points in TXT keys", () => {
+    const invalidPoint = `04${"00".repeat(64)}`;
+    const result = parseTxtRecords([
+      `posemesh:v1; alg=ecdsa-p256-sha256; publicKey=${invalidPoint}`,
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
+    assert.match(result.warnings[0]?.message ?? "", /P-256/);
+  });
+
   it("enforces TXT parser limits", () => {
     assert.throws(
       () => parseTxtRecords(["v=spf1 -all", "v=spf1 -all"], { maxTxtRecords: 1 }),

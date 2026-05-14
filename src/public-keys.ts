@@ -6,6 +6,14 @@ import type { ManifestSignatureAlgorithm } from "./types.ts";
 const HEX_PUBLIC_KEY = /^(?:0x)?[0-9a-f]+$/i;
 const BASE64_PUBLIC_KEY = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const MAX_GENERIC_PUBLIC_KEY_BYTES = 1_024;
+const P256_UNCOMPRESSED_SPKI_PREFIX = Buffer.from(
+  "3059301306072a8648ce3d020106082a8648ce3d030107034200",
+  "hex",
+);
+const P256_COMPRESSED_SPKI_PREFIX = Buffer.from(
+  "3039301306072a8648ce3d020106082a8648ce3d030107032200",
+  "hex",
+);
 const P256_CURVE_NAMES = new Set(["P-256", "prime256v1", "secp256r1"]);
 
 export function parsePublicKey(
@@ -78,13 +86,17 @@ export function decodePublicKey(value: string, field: string): Buffer {
 
 function isP256PublicKey(bytes: Buffer): boolean {
   if (bytes.byteLength === 65 && bytes[0] === 0x04) {
-    return true;
+    return isP256DerKey(Buffer.concat([P256_UNCOMPRESSED_SPKI_PREFIX, bytes]));
   }
 
   if (bytes.byteLength === 33 && (bytes[0] === 0x02 || bytes[0] === 0x03)) {
-    return true;
+    return isP256DerKey(Buffer.concat([P256_COMPRESSED_SPKI_PREFIX, bytes]));
   }
 
+  return isP256DerKey(bytes);
+}
+
+function isP256DerKey(bytes: Buffer): boolean {
   try {
     return isP256KeyObject(createPublicKey({ key: bytes, format: "der", type: "spki" }));
   } catch {

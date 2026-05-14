@@ -244,6 +244,27 @@ describe("DohResolver", () => {
       },
     ]);
   });
+
+  it("reports malformed DNS-over-HTTPS TLSA answers as lookup errors", async () => {
+    const resolver = new DohResolver({
+      name: "doh-test",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          Status: 0,
+          Answer: [{ type: 52, data: "3 1" }],
+        }),
+      }),
+    });
+
+    const detailed = await resolver.resolveTlsaDetailed("manifest.example.test", 443);
+
+    assert.equal(detailed.status, "lookup-error");
+    assert.equal(detailed.code, "RESOLVER_LOOKUP_ERROR");
+    assert.match(detailed.error ?? "", /TLSA answer parsing failed/);
+    await assert.rejects(() => resolver.resolveTlsa("manifest.example.test", 443), /TLSA answer parsing failed/);
+  });
 });
 
 describe("DotResolver", () => {

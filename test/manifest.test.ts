@@ -457,6 +457,44 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(fetched.dane?.matchedRecord?.selector, 1);
   });
 
+  it("rejects TLSA certUsage values outside the prototype DANE-EE subset", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const peerSpki = Buffer.from("mock-dane-spki", "utf8");
+    const signed = createSignedManifestBody({
+      version: 1,
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(
+            signed.body,
+            undefined,
+            "application/json",
+            peerSpki,
+          ),
+          enableDane: true,
+          resolveTlsa: async () => [
+            {
+              certUsage: 2,
+              selector: 1,
+              matchingType: 1,
+              data: createHash("sha256").update(peerSpki).digest(),
+            },
+          ],
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /certUsage 3/,
+    );
+  });
+
   it("falls back with a warning when optional DANE has no TLSA records", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const peerSpki = Buffer.from("mock-dane-spki", "utf8");

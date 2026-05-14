@@ -16,7 +16,7 @@ This repository is an unofficial prototype. It is not official Auki software, no
 - TXT records for the requested `.posemesh` name may anchor manifest verification keys.
 - Callers may also pass explicit trusted manifest verification keys.
 - In strict mode, fetched manifests must be signed by an anchored or trusted key.
-- Optional DANE TLSA validation can bind HTTPS certificate material to DNS-published TLSA records when the caller supplies a Handshake-aware TLSA resolver.
+- Optional DANE TLSA validation can bind HTTPS certificate material to DNS-published TLSA records when the caller supplies a Handshake-aware TLSA resolver. This prototype only implements the DANE-EE subset (`certUsage` 3).
 
 ## Main Threats
 
@@ -159,7 +159,7 @@ Reviewers should treat `demo` and `permissive` as prototype conveniences, not pr
 - Confirm official namespace ownership and governance.
 - Define the signed manifest schema and canonical serialization.
 - Define key issuance, rotation, revocation, and emergency recovery.
-- Decide resolver strategy and DANE TLSA requirements.
+- Decide resolver strategy, DANE TLSA requirements, and whether production clients need additional DANE usages beyond DANE-EE.
 - Set production limits and cache policy from real deployment data.
 - Decide package provenance, release signing, and CI requirements.
 - Run external security review for SSRF, replay, downgrade, resolver disagreement, and operator impersonation.

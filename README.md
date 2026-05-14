@@ -12,7 +12,7 @@ In plain language, this prototype asks:
 
 > Could a stable Handshake name like `hq.posemesh` or `relays.posemesh` help Posemesh clients find the right infrastructure, even when servers, keys, or regions change?
 
-The answer demonstrated here is yes, at prototype level.
+This repository demonstrates a plausible yes, at proof-of-concept level.
 
 A Posemesh client, robot, SDK, or agent may need to answer questions like:
 
@@ -94,7 +94,7 @@ The normalized result can include:
 
 ## What this prototype proves
 
-This prototype proves the basic discovery flow in a small, reviewable repo:
+This prototype demonstrates the basic discovery flow in a small, reviewable repo:
 
 1. A stable Handshake name can point to Posemesh discovery metadata.
 2. The metadata can be small enough to fit in TXT records.
@@ -212,11 +212,11 @@ This section summarizes the defaults and trust assumptions reviewers should unde
 
 Handshake can publish DNS records outside the conventional ICANN root, so this prototype treats DANE TLSA as the preferred certificate-binding direction for future production work.
 
-When `enableDane` is set, the manifest fetcher queries `_443._tcp.<manifest-host>` through the configured TLSA resolver and compares the presented TLS certificate or public key against TLSA records. The prototype supports TLSA selector `0` (full certificate), selector `1` (SPKI), and matching types `0`, `1`, and `2`.
+When `enableDane` is set, the manifest fetcher queries `_443._tcp.<manifest-host>` through the configured TLSA resolver and compares the presented TLS certificate or public key against TLSA records. To avoid overstating DANE semantics, this prototype only supports TLSA cert usage `3` (`DANE-EE`). It supports selector `0` (full certificate), selector `1` (SPKI), and matching types `0`, `1`, and `2` for that DANE-EE subset.
 
 If DANE is enabled but no TLSA records exist, the fetcher falls back to normal TLS validation and returns a warning. If `requireTlsa` is set, missing, invalid, or mismatched TLSA records fail closed.
 
-Real `.posemesh` usage would need a Handshake-aware TLSA resolver. A normal system DNS resolver may not know about `.posemesh` or its TLSA records.
+Real `.posemesh` usage would need a Handshake-aware TLSA resolver. A normal system DNS resolver may not know about `.posemesh` or its TLSA records. Supporting other DANE usages, such as PKIX-TA or DANE-TA, would require additional validation logic and security review.
 
 ### Resolver Trust & Consensus
 
@@ -249,7 +249,7 @@ The safest production direction would be:
 - require `sourceName`, `manifestUrl`, `issuedAt`, and `expiresAt` in signed payloads
 - configure an expected `audience` for clients that know their trust context
 - use a Handshake-aware resolver, preferably with multi-resolver quorum or strict consensus
-- enable DANE TLSA validation and consider `requireTlsa` once Auki operates TLSA records
+- enable DANE TLSA validation and consider `requireTlsa` once Auki operates DANE-EE TLSA records
 - keep parser and manifest limits enabled
 - keep `Content-Type: application/json` enforcement enabled
 - keep redirects, private IPs, localhost, link-local, multicast, documentation, and reserved addresses blocked
@@ -269,7 +269,7 @@ Threat boundaries:
 
 - TXT records can point to manifests and anchor verification keys, but TXT alone is not enough to trust live metadata.
 - HTTPS protects transport to the manifest host, but strict signed payload verification is the main integrity check.
-- DANE TLSA can bind certificate material to DNS records when a Handshake-aware TLSA resolver is configured.
+- DANE TLSA can bind certificate material to DNS records when a Handshake-aware TLSA resolver is configured. This prototype intentionally limits that support to DANE-EE records.
 - Resolver consensus can reduce disagreement risk, but it does not prove that records are official Auki records.
 - Logs are opt-in and redacted, but production operators still need retention and privacy policies.
 
