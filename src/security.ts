@@ -1,6 +1,7 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { discoveryError, logDebug } from "./observability.ts";
+import { parseStrictUtcTimestamp } from "./timestamps.ts";
 import type {
   DiscoveryLogger,
   LoggerRedactionOptions,
@@ -211,9 +212,9 @@ function parseOptionalKeyTimestamp(value: string | undefined, field: string): Da
     return undefined;
   }
 
-  const parsed = new Date(value);
+  const parsed = parseStrictUtcTimestamp(value);
 
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+  if (!parsed) {
     throw discoveryError(
       "MANIFEST_KEY_INACTIVE",
       `Manifest verification key ${field} must be a valid ISO-8601 UTC timestamp.`,

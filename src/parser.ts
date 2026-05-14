@@ -1,6 +1,7 @@
 import { decodePublicKey, parsePublicKey } from "./public-keys.ts";
 import { parseManifestSignatureAlgorithm } from "./security.ts";
 import { createWarning, getErrorCode, getErrorMessage, logDebug, logWarn } from "./observability.ts";
+import { parseStrictUtcTimestamp } from "./timestamps.ts";
 import type {
   DiscoveryLogger,
   LoggerRedactionOptions,
@@ -292,9 +293,8 @@ function parseOptionalTimestamp(value: string | undefined, field: string): strin
   }
 
   const trimmed = value.trim();
-  const parsed = new Date(trimmed);
 
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== trimmed) {
+  if (!parseStrictUtcTimestamp(trimmed)) {
     throw new Error(`TXT field ${field} must be a valid ISO-8601 UTC timestamp.`);
   }
 

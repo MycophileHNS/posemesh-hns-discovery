@@ -38,14 +38,14 @@ describe("TXT parsing", () => {
 
   it("parses multiple TXT verification keys with rotation windows", () => {
     const parsed = parsePosemeshTxt(
-      `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; publicKeys=${TXT_PUBLIC_KEY_TWO},${TXT_PUBLIC_KEY_THREE}; keyId=rotating-key; alg=ed25519; notBefore=2026-05-12T00:00:00.000Z; notAfter=2026-05-13T00:00:00.000Z`,
+      `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; publicKeys=${TXT_PUBLIC_KEY_TWO},${TXT_PUBLIC_KEY_THREE}; keyId=rotating-key; alg=ed25519; notBefore=2026-05-12T00:00:00Z; notAfter=2026-05-13T00:00:00Z`,
     );
 
     assert.deepEqual(parsed.publicKeys, [TXT_PUBLIC_KEY, TXT_PUBLIC_KEY_TWO, TXT_PUBLIC_KEY_THREE]);
     assert.equal(parsed.verificationKeys.length, 3);
     assert.equal(parsed.verificationKeys[0]?.id, "rotating-key");
-    assert.equal(parsed.verificationKeys[0]?.notBefore, "2026-05-12T00:00:00.000Z");
-    assert.equal(parsed.verificationKeys[0]?.notAfter, "2026-05-13T00:00:00.000Z");
+    assert.equal(parsed.verificationKeys[0]?.notBefore, "2026-05-12T00:00:00Z");
+    assert.equal(parsed.verificationKeys[0]?.notAfter, "2026-05-13T00:00:00Z");
   });
 
   it("parses agent-identity:v1 JSON records", () => {

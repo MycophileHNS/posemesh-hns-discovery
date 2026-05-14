@@ -1176,16 +1176,16 @@ describe("Posemesh manifest parsing", () => {
       trustedKeys: [
         {
           ...signed.trustedKey,
-          notBefore: "2026-05-11T00:00:00.000Z",
-          notAfter: "2026-05-13T00:00:00.000Z",
+          notBefore: "2026-05-11T00:00:00Z",
+          notAfter: "2026-05-13T00:00:00Z",
         },
       ],
       expectedName: "hq.posemesh",
       now: () => new Date("2026-05-12T01:00:00.000Z"),
     });
 
-    assert.equal(fetched.verification.keyNotBefore, "2026-05-11T00:00:00.000Z");
-    assert.equal(fetched.verification.keyNotAfter, "2026-05-13T00:00:00.000Z");
+    assert.equal(fetched.verification.keyNotBefore, "2026-05-11T00:00:00Z");
+    assert.equal(fetched.verification.keyNotAfter, "2026-05-13T00:00:00Z");
   });
 
   it("verifies ECDSA P-256 signed manifests", async () => {

@@ -332,6 +332,28 @@ describe("discoverPosemesh", () => {
     );
   });
 
+  it("rejects plain custom manifestFetcher results when requireManifest is set", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+          }),
+          requireManifest: true,
+          manifestFetcher: async () => ({
+            version: 1,
+            sourceName: "hq.posemesh",
+          }),
+          now: () => fixedNow,
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_SIGNATURE_REQUIRED");
+        assert.match((error as Error).message, /Required manifest discovery failed/);
+        return true;
+      },
+    );
+  });
+
   it("surfaces demo-mode unsigned manifest warnings in normalized discovery", async () => {
     const result = await discoverPosemesh("hq.posemesh", {
       resolver: new MockResolver({
@@ -460,8 +482,18 @@ describe("discoverPosemesh", () => {
           }),
           requireManifest: true,
           manifestFetcher: async () => ({
-            version: 1,
-            sourceName: "mismatch.posemesh",
+            manifest: {
+              version: 1,
+              sourceName: "mismatch.posemesh",
+            },
+            verification: {
+              status: "verified",
+              verifiedAt: fixedNow.toISOString(),
+            },
+            cache: {
+              cacheStatus: "fresh",
+              checkedAt: fixedNow.toISOString(),
+            },
           }),
           now: () => fixedNow,
         }),

@@ -8,6 +8,7 @@ interface CliOptions {
   live: boolean;
   dnsServer?: string;
   fetchManifest: boolean;
+  requireManifest: boolean;
 }
 
 const [command = "help", ...args] = process.argv.slice(2);
@@ -37,6 +38,7 @@ async function runResolve(args: string[]): Promise<void> {
   const discoveryOptions: DiscoverPosemeshOptions = {
     resolver: options.live ? new DnsResolver(options.dnsServer) : new MockResolver(demoTxtRecords),
     fetchManifest: options.fetchManifest,
+    requireManifest: options.requireManifest,
   };
 
   if (!options.live) {
@@ -68,6 +70,7 @@ function parseArgs(args: string[]): { positional: string[]; options: CliOptions 
   const options: CliOptions = {
     live: false,
     fetchManifest: true,
+    requireManifest: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -81,6 +84,8 @@ function parseArgs(args: string[]): { positional: string[]; options: CliOptions 
       options.live = true;
     } else if (arg === "--no-manifest") {
       options.fetchManifest = false;
+    } else if (arg === "--require-manifest") {
+      options.requireManifest = true;
     } else if (arg === "--dns-server") {
       const value = args[index + 1];
 
@@ -109,6 +114,7 @@ Options:
   --live                         Resolve TXT records with DNS instead of demo records.
   --dns-server 127.0.0.1:5350    Use a specific Handshake-aware DNS server.
   --no-manifest                  Parse TXT records without fetching manifests.
+  --require-manifest             Fail if no unambiguous manifest can be fetched and accepted.
 
 Only subnames under .posemesh are accepted.
 `);

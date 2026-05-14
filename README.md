@@ -212,11 +212,11 @@ This section summarizes the defaults and trust assumptions reviewers should unde
 
 Handshake can publish DNS records outside the conventional ICANN root, so this prototype treats DANE TLSA as the preferred certificate-binding direction for future production work.
 
-When `enableDane` is set, the manifest fetcher queries `_443._tcp.<manifest-host>` through the configured TLSA resolver and compares the presented TLS certificate or public key against TLSA records. To avoid overstating DANE semantics, this prototype only supports TLSA cert usage `3` (`DANE-EE`). It supports selector `0` (full certificate), selector `1` (SPKI), and matching types `0`, `1`, and `2` for that DANE-EE subset.
+When `enableDane` is set, the manifest fetcher queries `_443._tcp.<manifest-host>` through the configured TLSA resolver and compares the presented TLS certificate or public key against TLSA records. DANE is only meaningful when those TLSA answers come from a trusted Handshake-aware resolver path; an untrusted resolver can lie about TLSA records just like it can lie about TXT records. To avoid overstating DANE semantics, this prototype only supports TLSA cert usage `3` (`DANE-EE`). It supports selector `0` (full certificate), selector `1` (SPKI), and matching types `0`, `1`, and `2` for that DANE-EE subset.
 
 If DANE is enabled but no TLSA records exist, the fetcher falls back to normal TLS validation and returns a warning. If `requireTlsa` is set, missing, invalid, or mismatched TLSA records fail closed.
 
-Real `.posemesh` usage would need a Handshake-aware TLSA resolver. A normal system DNS resolver may not know about `.posemesh` or its TLSA records. Supporting other DANE usages, such as PKIX-TA or DANE-TA, would require additional validation logic and security review.
+Real `.posemesh` usage would need a trusted Handshake-aware TLSA resolver. A normal system DNS resolver may not know about `.posemesh` or its TLSA records. Supporting other DANE usages, such as PKIX-TA or DANE-TA, would require additional validation logic and security review.
 
 ### Resolver Trust & Consensus
 
@@ -381,6 +381,7 @@ To try live DNS resolution through a Handshake-aware resolver:
 
 ```bash
 npm run resolve -- hq.posemesh --live --dns-server 127.0.0.1:5350
+npm run resolve -- hq.posemesh --live --dns-server 127.0.0.1:5350 --require-manifest
 ```
 
 That DNS server could be backed by software such as hsd or hnsd, depending on the operator's setup.

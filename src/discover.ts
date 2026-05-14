@@ -16,6 +16,7 @@ import { DnsResolver } from "./resolvers.ts";
 import type {
   DiscoverPosemeshOptions,
   FetchPosemeshManifestOptions,
+  FetchedPosemeshManifest,
   ManifestCacheMetadata,
   ManifestDaneMetadata,
   ManifestVerificationKey,
@@ -100,7 +101,19 @@ export async function discoverPosemesh(
   if (manifestUrl && shouldFetchManifest) {
     try {
       if (options.manifestFetcher) {
-        manifest = await options.manifestFetcher(manifestUrl, manifestFetchOptions);
+        const fetched = await options.manifestFetcher(manifestUrl, manifestFetchOptions);
+
+        if (isFetchedPosemeshManifest(fetched)) {
+          assertCustomFetchedManifestAllowed(fetched, options, manifestUrl);
+          manifest = fetched.manifest;
+          manifestVerification = fetched.verification;
+          manifestCache = fetched.cache;
+          manifestDane = fetched.dane;
+          warnings.push(...(fetched.warnings ?? []));
+        } else {
+          assertPlainCustomManifestAllowed(options, manifestUrl);
+          manifest = fetched;
+        }
       } else {
         const fetched = await fetchPosemeshManifestWithVerification(
           manifestUrl,
@@ -283,6 +296,49 @@ function tlsaResolverFromSelectedResolver(resolver: unknown): TlsaResolver | und
   }
 
   return resolver as unknown as TlsaResolver;
+}
+
+function assertCustomFetchedManifestAllowed(
+  fetched: FetchedPosemeshManifest,
+  options: DiscoverPosemeshOptions,
+  manifestUrl: string,
+): void {
+  if (!requiresVerifiedCustomManifest(options) || fetched.verification.status === "verified") {
+    return;
+  }
+
+  throw discoveryError(
+    "MANIFEST_SIGNATURE_INVALID",
+    "Custom manifestFetcher returned a manifest that is not verified for strict required-manifest discovery.",
+    { url: manifestUrl, verificationStatus: fetched.verification.status },
+  );
+}
+
+function assertPlainCustomManifestAllowed(
+  options: DiscoverPosemeshOptions,
+  manifestUrl: string,
+): void {
+  if (!requiresVerifiedCustomManifest(options)) {
+    return;
+  }
+
+  throw discoveryError(
+    "MANIFEST_SIGNATURE_REQUIRED",
+    "Custom manifestFetcher returned an unverified manifest. Return FetchedPosemeshManifest with verification.status \"verified\" or use the built-in manifest fetcher for strict required-manifest discovery.",
+    { url: manifestUrl },
+  );
+}
+
+function requiresVerifiedCustomManifest(options: DiscoverPosemeshOptions): boolean {
+  return options.requireManifest === true || options.manifestFetchOptions?.securityMode === "strict";
+}
+
+function isFetchedPosemeshManifest(value: unknown): value is FetchedPosemeshManifest {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return isRecord(value.manifest) && isRecord(value.verification) && isRecord(value.cache);
 }
 
 function collectManifestVerificationKeys(

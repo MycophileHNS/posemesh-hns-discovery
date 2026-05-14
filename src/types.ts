@@ -389,7 +389,7 @@ export interface FetchedPosemeshManifest {
 export type ManifestFetcher = (
   url: string,
   options?: FetchPosemeshManifestOptions,
-) => Promise<PosemeshManifest>;
+) => Promise<PosemeshManifest | FetchedPosemeshManifest>;
 
 export interface DiscoverPosemeshOptions {
   resolver?: TxtResolver;
