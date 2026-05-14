@@ -30,6 +30,9 @@ const DNS_TYPE = {
 } as const;
 
 type ResolverCandidate = TxtResolver & Partial<TlsaResolver>;
+type NodeDnsResolverWithOptionalTlsa = Resolver & {
+  resolveTlsa?: (name: string) => Promise<ManifestTlsaRecord[]>;
+};
 
 interface CompositeResolverOptions {
   strategy?: CompositeResolverStrategy;
@@ -200,9 +203,32 @@ export class DnsResolver implements TxtResolver, TlsaResolver {
   ): Promise<DetailedResolverResult<ManifestTlsaRecord>> {
     const recordName = createTlsaRecordName(hostname, port);
     logDebug(this.logger, "Resolving TLSA records", { name: recordName, resolver: this.name }, this.redaction);
+    const resolveTlsa = (this.resolver as NodeDnsResolverWithOptionalTlsa).resolveTlsa;
+
+    if (typeof resolveTlsa !== "function") {
+      const error = discoveryError(
+        "RESOLVER_UNSUPPORTED",
+        "Node.js 22.15 or newer is required for built-in TLSA support. Use a DoH resolver, custom TLSA resolver, or disable DANE.",
+      );
+      logWarn(
+        this.logger,
+        "TLSA lookup unsupported",
+        { name: recordName, resolver: this.name, ...errorLogFields(error, "RESOLVER_UNSUPPORTED") },
+        this.redaction,
+      );
+      return createDetailedResult({
+        name: recordName,
+        type: "TLSA",
+        resolver: this.name,
+        status: "lookup-error",
+        code: "RESOLVER_UNSUPPORTED",
+        records: [],
+        error: error.message,
+      });
+    }
 
     try {
-      const records = (await this.resolver.resolveTlsa(recordName)) as ManifestTlsaRecord[];
+      const records = (await resolveTlsa.call(this.resolver, recordName)) as ManifestTlsaRecord[];
       return createDetailedResult({
         name: recordName,
         type: "TLSA",

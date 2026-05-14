@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   CompositeResolver,
+  DnsResolver,
   DohResolver,
   DotResolver,
   MockResolver,
@@ -53,6 +54,26 @@ describe("MockResolver", () => {
     assert.equal(tlsa.status, "ok");
     assert.equal(tlsa.name, "_443._tcp.manifest.example.test");
     assert.equal(missing.status, "no-records");
+  });
+});
+
+describe("DnsResolver", () => {
+  it("reports unsupported TLSA lookups on Node versions without resolveTlsa", async () => {
+    const resolver = new DnsResolver(undefined, "dns-test");
+    const internal = resolver as unknown as {
+      resolver: { resolveTlsa?: ((name: string) => Promise<unknown[]>) | undefined };
+    };
+    internal.resolver.resolveTlsa = undefined;
+
+    const detailed = await resolver.resolveTlsaDetailed("manifest.example.test", 443);
+
+    assert.equal(detailed.status, "lookup-error");
+    assert.equal(detailed.code, "RESOLVER_UNSUPPORTED");
+    assert.match(detailed.error ?? "", /Node\.js 22\.15 or newer/);
+    await assert.rejects(
+      () => resolver.resolveTlsa("manifest.example.test", 443),
+      /Node\.js 22\.15 or newer/,
+    );
   });
 });
 
