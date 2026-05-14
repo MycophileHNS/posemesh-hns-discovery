@@ -96,6 +96,7 @@ describe("discoverPosemesh", () => {
     const result = await discoverPosemesh("hq.posemesh", {
       resolver,
       now: () => fixedNow,
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => manifest,
     });
 
@@ -169,7 +170,11 @@ describe("discoverPosemesh", () => {
       version: 1,
       sourceName: "hq.posemesh",
     };
-    const manifestFetchOptions = { timeoutMs: 1_000, maxBytes: 4_096 };
+    const manifestFetchOptions = {
+      timeoutMs: 1_000,
+      maxBytes: 4_096,
+      securityMode: "demo" as const,
+    };
     let receivedOptions: unknown;
 
     await discoverPosemesh("hq.posemesh", {
@@ -214,6 +219,7 @@ describe("discoverPosemesh", () => {
     await discoverPosemesh("hq.posemesh", {
       resolver,
       manifestFetchOptions: {
+        securityMode: "demo",
         enableDane: true,
         requireTlsa: true,
       },
@@ -245,6 +251,7 @@ describe("discoverPosemesh", () => {
           `posemesh:v1; manifest=https://example.com/hq.json; alg=ed25519; keyId=hq-key; publicKey=${txtPublicKey}`,
         ],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async (_url, options) => {
         receivedOptions = options;
         return {
@@ -264,6 +271,7 @@ describe("discoverPosemesh", () => {
           source: "txt",
         },
       ],
+      securityMode: "demo",
       expectedName: "hq.posemesh",
       expectedManifestUrl: "https://example.com/hq.json",
     });
@@ -352,6 +360,27 @@ describe("discoverPosemesh", () => {
         return true;
       },
     );
+  });
+
+  it("treats plain custom manifestFetcher results as unverified by default", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": [
+          "posemesh:v1; manifest=https://example.com/hq.json; capabilities=domain-discovery",
+        ],
+      }),
+      manifestFetcher: async () => ({
+        version: 1,
+        sourceName: "hq.posemesh",
+        relays: [{ endpoint: "wss://relay.example.com" }],
+      }),
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(result.relays, []);
+    assert.deepEqual(result.capabilities, ["domain-discovery"]);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_SIGNATURE_REQUIRED");
   });
 
   it("surfaces demo-mode unsigned manifest warnings in normalized discovery", async () => {
@@ -458,6 +487,7 @@ describe("discoverPosemesh", () => {
       resolver: new MockResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => ({
         version: 1,
         sourceName: "mismatch.posemesh",
@@ -510,6 +540,7 @@ describe("discoverPosemesh", () => {
       resolver: new MockResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => ({
         version: 1,
         name: "hq.posemesh",
@@ -530,6 +561,7 @@ describe("discoverPosemesh", () => {
       resolver: new MockResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => ({
         version: 1,
         sourceName: "hq.posemesh",

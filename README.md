@@ -254,6 +254,7 @@ The safest production direction would be:
 - keep parser and manifest limits enabled
 - keep `Content-Type: application/json` enforcement enabled
 - keep redirects, private IPs, localhost, link-local, multicast, documentation, and reserved addresses blocked
+- treat custom `manifestFetcher` implementations as trusted code and return verified `FetchedPosemeshManifest` objects in strict production flows
 - use redacted structured logging
 
 The demo intentionally relaxes some of this so reviewers can run the project without live Handshake records, hosted manifests, or real Auki signing keys.
@@ -270,7 +271,7 @@ Threat boundaries:
 
 - TXT records can point to manifests and anchor verification keys, but TXT alone is not enough to trust live metadata.
 - HTTPS protects transport to the manifest host, but strict signed payload verification is the main integrity check.
-- DANE TLSA can bind certificate material to DNS records when a Handshake-aware TLSA resolver is configured. This prototype intentionally limits that support to DANE-EE records.
+- DANE TLSA can bind certificate material to DNS records when a trusted Handshake-aware TLSA resolver is configured. This prototype intentionally limits that support to DANE-EE records.
 - Resolver consensus can reduce disagreement risk, but it does not prove that records are official Auki records.
 - Logs are opt-in and redacted, but production operators still need retention and privacy policies.
 
@@ -376,6 +377,8 @@ npm run resolve -- americaNorth.posemesh
 The default CLI mode uses mock records from [`src/demo.ts`](src/demo.ts).
 
 The CLI intentionally accepts only subnames under `.posemesh`, such as `hq.posemesh` or `relays.posemesh`. The root name `posemesh` and unrelated Handshake names are outside this prototype.
+
+`--require-manifest` is intended for live or otherwise verified manifest fetching. The default demo mode uses local unsigned mock manifests, so use `--live` with `--require-manifest` or omit the flag for mock-record walkthroughs.
 
 To try live DNS resolution through a Handshake-aware resolver:
 

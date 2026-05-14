@@ -35,6 +35,12 @@ async function runResolve(args: string[]): Promise<void> {
     throw new Error("Missing name. Example: npm run resolve -- hq.posemesh");
   }
 
+  if (options.requireManifest && !options.live) {
+    throw new Error(
+      "--require-manifest is for live or verified manifest fetching. Add --live or omit --require-manifest when using mock demo records.",
+    );
+  }
+
   const discoveryOptions: DiscoverPosemeshOptions = {
     resolver: options.live ? new DnsResolver(options.dnsServer) : new MockResolver(demoTxtRecords),
     fetchManifest: options.fetchManifest,
@@ -43,6 +49,7 @@ async function runResolve(args: string[]): Promise<void> {
 
   if (!options.live) {
     discoveryOptions.manifestFetcher = demoManifestFetcher;
+    discoveryOptions.manifestFetchOptions = { securityMode: "demo" };
   }
 
   const result = await discoverPosemesh(name, discoveryOptions);
@@ -54,10 +61,15 @@ async function runDemo(args: string[]): Promise<void> {
   const { options } = parseArgs(args);
   const results = [];
 
+  if (options.requireManifest) {
+    throw new Error("--require-manifest is not supported by npm run demo because demo manifests are unsigned mock data.");
+  }
+
   for (const name of demoNames) {
     results.push(await discoverPosemesh(name, {
       resolver: new MockResolver(demoTxtRecords),
       fetchManifest: options.fetchManifest,
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: demoManifestFetcher,
     }));
   }
@@ -114,7 +126,7 @@ Options:
   --live                         Resolve TXT records with DNS instead of demo records.
   --dns-server 127.0.0.1:5350    Use a specific Handshake-aware DNS server.
   --no-manifest                  Parse TXT records without fetching manifests.
-  --require-manifest             Fail if no unambiguous manifest can be fetched and accepted.
+  --require-manifest             Live mode only: fail unless a verified manifest is accepted.
 
 Only subnames under .posemesh are accepted.
 `);

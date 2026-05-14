@@ -321,9 +321,12 @@ export type ManifestHttpsRequest = (
 ) => ClientRequest;
 
 /**
- * Resolves TLSA records for a manifest hostname. Production Handshake clients
- * should provide a Handshake-aware resolver here; the default implementation
- * uses Node's configured DNS resolver for compatibility with tests and demos.
+ * Resolves TLSA records for a manifest hostname and port.
+ *
+ * Production Handshake clients should provide a trusted Handshake-aware resolver
+ * path here. The built-in fallback uses Node's configured DNS resolver only for
+ * compatibility with tests, demos, and conventional DNS hosts; it does not make
+ * the process Handshake-aware by itself.
  */
 export type ManifestTlsaResolver = (
   hostname: string,
@@ -386,6 +389,16 @@ export interface FetchedPosemeshManifest {
   warnings?: ParseWarning[];
 }
 
+/**
+ * Optional manifest fetching override.
+ *
+ * This is a trust boundary: a custom fetcher bypasses the built-in HTTPS safety
+ * checks, strict Content-Type enforcement, DANE/TLS pin checks, and signature
+ * parsing unless it returns a verified FetchedPosemeshManifest. In the default
+ * strict mode, plain PosemeshManifest results are treated as unverified and are
+ * rejected or downgraded to warnings. Use `securityMode: "demo"` or
+ * `"permissive"` only for prototype-only custom fetching.
+ */
 export type ManifestFetcher = (
   url: string,
   options?: FetchPosemeshManifestOptions,

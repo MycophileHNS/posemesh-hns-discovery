@@ -276,6 +276,7 @@ function createManifestFetchOptions(
   const resolvedRedaction = options?.redaction ?? redaction;
   const fetchOptions: FetchPosemeshManifestOptions = {
     ...(options ?? {}),
+    securityMode: options?.securityMode ?? "strict",
     trustedKeys,
     expectedName: options?.expectedName ?? name,
     ...(manifestUrl ? { expectedManifestUrl: options?.expectedManifestUrl ?? manifestUrl } : {}),
@@ -309,7 +310,7 @@ function assertCustomFetchedManifestAllowed(
 
   throw discoveryError(
     "MANIFEST_SIGNATURE_INVALID",
-    "Custom manifestFetcher returned a manifest that is not verified for strict required-manifest discovery.",
+    "Custom manifestFetcher returned a manifest that is not verified for strict discovery.",
     { url: manifestUrl, verificationStatus: fetched.verification.status },
   );
 }
@@ -324,13 +325,18 @@ function assertPlainCustomManifestAllowed(
 
   throw discoveryError(
     "MANIFEST_SIGNATURE_REQUIRED",
-    "Custom manifestFetcher returned an unverified manifest. Return FetchedPosemeshManifest with verification.status \"verified\" or use the built-in manifest fetcher for strict required-manifest discovery.",
+    "Custom manifestFetcher returned an unverified manifest. Return FetchedPosemeshManifest with verification.status \"verified\", use the built-in manifest fetcher, or explicitly set securityMode to \"demo\" or \"permissive\" for prototype-only custom fetching.",
     { url: manifestUrl },
   );
 }
 
 function requiresVerifiedCustomManifest(options: DiscoverPosemeshOptions): boolean {
-  return options.requireManifest === true || options.manifestFetchOptions?.securityMode === "strict";
+  if (options.requireManifest) {
+    return true;
+  }
+
+  const mode = options.manifestFetchOptions?.securityMode ?? "strict";
+  return mode !== "demo" && mode !== "permissive";
 }
 
 function isFetchedPosemeshManifest(value: unknown): value is FetchedPosemeshManifest {
