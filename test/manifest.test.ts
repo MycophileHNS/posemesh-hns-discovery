@@ -788,6 +788,30 @@ describe("Posemesh manifest parsing", () => {
     assert.equal(fetched.verification.status, "verified");
   });
 
+  it("rejects signed manifests whose name conflicts with expectedName", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const signed = createSignedManifestBody({
+      version: 1,
+      name: "evil.posemesh",
+      sourceName: "hq.posemesh",
+      manifestUrl,
+      issuedAt: "2026-05-12T00:00:00.000Z",
+      expiresAt: "2026-05-12T12:00:00.000Z",
+    });
+
+    await assert.rejects(
+      () =>
+        fetchPosemeshManifestWithVerification(manifestUrl, {
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+          httpsRequest: createManifestHttpsRequest(signed.body),
+          trustedKeys: [signed.trustedKey],
+          expectedName: "hq.posemesh",
+          now: () => new Date("2026-05-12T01:00:00.000Z"),
+        }),
+      /Manifest name evil\.posemesh does not match requested name hq\.posemesh/,
+    );
+  });
+
   it("requires configured audience in strict signed manifests", async () => {
     const manifestUrl = "https://manifest.example.test/posemesh.json";
     const signed = createSignedManifestBody({

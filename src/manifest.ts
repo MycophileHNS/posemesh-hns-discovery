@@ -921,6 +921,17 @@ function validateExpectedName(manifest: PosemeshManifest, expectedName: string |
       { expectedName, sourceName: manifest.sourceName },
     );
   }
+
+  if (
+    manifest.name &&
+    normalizeDiscoveryNameForBinding(manifest.name) !== normalizeDiscoveryNameForBinding(expectedName)
+  ) {
+    throw discoveryError(
+      "MANIFEST_BINDING_MISMATCH",
+      `Manifest name ${manifest.name} does not match requested name ${expectedName}.`,
+      { expectedName, name: manifest.name, sourceName: manifest.sourceName },
+    );
+  }
 }
 
 function validateExpectedManifestUrl(
