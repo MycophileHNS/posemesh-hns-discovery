@@ -516,7 +516,16 @@ function createFetchedManifestResult(
 }
 
 function looksLikeSignedManifestEnvelope(value: unknown): boolean {
-  return isRecord(value) && ("payload" in value || "algorithm" in value);
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    typeof value.payload === "string" &&
+    Boolean(value.payload.trim()) &&
+    typeof value.signature === "string" &&
+    Boolean(value.signature.trim()) &&
+    typeof value.algorithm === "string" &&
+    Boolean(value.algorithm.trim())
+  );
 }
 
 function decodeEnvelopePayloadText(value: unknown): string {
@@ -839,11 +848,25 @@ function requiredUrlField(
   limits: ResolvedManifestLimits,
 ): string {
   return validateUrl(
-    requiredStringField(value, field, parent, limits),
+    requiredRawStringField(value, field, parent),
     `${parent}.${field}`,
     protocols,
     limits,
   );
+}
+
+function requiredRawStringField(
+  value: Record<string, unknown>,
+  field: string,
+  parent: string,
+): string {
+  const item = value[field];
+
+  if (typeof item !== "string" || !item.trim()) {
+    throw new Error(`Manifest field ${parent}.${field} is required.`);
+  }
+
+  return item.trim();
 }
 
 function optionalStringField<T extends string>(
@@ -889,8 +912,7 @@ function optionalUrlField<T extends string>(
   protocols: string[],
   limits: ResolvedManifestLimits,
 ): Partial<Record<T, string>> {
-  const stringField = optionalStringField(value, field, limits);
-  const item = stringField[field];
+  const item = optionalRawStringField(value, field);
 
   if (!item) {
     return {};
@@ -899,6 +921,23 @@ function optionalUrlField<T extends string>(
   return {
     [field]: validateUrl(item, field, protocols, limits),
   } as Partial<Record<T, string>>;
+}
+
+function optionalRawStringField<T extends string>(
+  value: Record<string, unknown>,
+  field: T,
+): string | undefined {
+  const item = value[field];
+
+  if (item === undefined) {
+    return undefined;
+  }
+
+  if (typeof item !== "string" || !item.trim()) {
+    throw new Error(`Manifest field ${field} must be a non-empty string.`);
+  }
+
+  return item.trim();
 }
 
 function validateExpectedName(manifest: PosemeshManifest, expectedName: string | undefined): void {

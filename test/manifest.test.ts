@@ -157,6 +157,32 @@ describe("Posemesh manifest parsing", () => {
     );
   });
 
+  it("uses URL-specific byte limits for manifest URLs and service endpoints", () => {
+    const longUrl = `https://example.com/${"a".repeat(3_000)}`;
+    const manifest = parsePosemeshManifest({
+      version: 1,
+      manifestUrl: longUrl,
+      healthCheck: longUrl,
+      relays: [{ endpoint: longUrl }],
+    });
+
+    assert.equal(manifest.manifestUrl, longUrl);
+    assert.equal(manifest.healthCheck, longUrl);
+    assert.equal(manifest.relays?.[0]?.endpoint, longUrl);
+
+    assert.throws(
+      () =>
+        parsePosemeshManifest(
+          {
+            version: 1,
+            manifestUrl: longUrl,
+          },
+          { maxUrlBytes: 128 },
+        ),
+      /manifestUrl exceeds 128 bytes/,
+    );
+  });
+
   it("rejects algorithm-specific public keys with invalid lengths", () => {
     assert.throws(
       () =>
@@ -656,6 +682,28 @@ describe("Posemesh manifest parsing", () => {
 
       assert.equal(fetched.manifest.sourceName, "hq.posemesh");
       assert.equal(fetched.manifest.signature, "legacy-inline-signature");
+      assert.equal(fetched.verification.status, "unsigned-allowed");
+    }
+  });
+
+  it("does not treat plain manifests with envelope-like metadata as signed envelopes", async () => {
+    const manifestUrl = "https://manifest.example.test/posemesh.json";
+    const body = JSON.stringify({
+      version: 1,
+      sourceName: "hq.posemesh",
+      algorithm: "routing-v1",
+      payload: "plain-manifest-metadata",
+    });
+
+    for (const securityMode of ["permissive", "demo"] as const) {
+      const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+        httpsRequest: createManifestHttpsRequest(body),
+        securityMode,
+        expectedName: "hq.posemesh",
+      });
+
+      assert.equal(fetched.manifest.sourceName, "hq.posemesh");
       assert.equal(fetched.verification.status, "unsigned-allowed");
     }
   });
