@@ -1,0 +1,16 @@
+# package.json "files" is the primary publish allowlist.
+# This ignore file keeps accidental local packaging small if that allowlist changes.
+
+src/
+test/
+examples/
+.github/
+scripts/
+coverage/
+node_modules/
+
+*.ts
+tsconfig*.json
+.DS_Store
+.env*
+npm-debug.log*

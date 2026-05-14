@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { describe, it } from "node:test";
 import {
   parseAgentIdentityTxt,
@@ -6,8 +7,10 @@ import {
   parseTxtRecords,
 } from "../src/parser.ts";
 
-const TXT_PUBLIC_KEY = "02aa";
-const AGENT_PUBLIC_KEY = "QUJDRA==";
+const TXT_PUBLIC_KEY = "aa".repeat(32);
+const TXT_PUBLIC_KEY_TWO = "bb".repeat(32);
+const TXT_PUBLIC_KEY_THREE = "cc".repeat(32);
+const AGENT_PUBLIC_KEY = "dd".repeat(32);
 
 describe("TXT parsing", () => {
   it("parses compact posemesh:v1 records", () => {
@@ -19,7 +22,30 @@ describe("TXT parsing", () => {
     assert.equal(parsed.version, 1);
     assert.equal(parsed.manifestUrl, "https://example.com/posemesh.json");
     assert.deepEqual(parsed.publicKeys, [TXT_PUBLIC_KEY]);
+    assert.equal(parsed.verificationKeys[0]?.algorithm, "ed25519");
     assert.deepEqual(parsed.capabilities, ["domain-discovery", "relay-discovery"]);
+  });
+
+  it("preserves legacy P-256 TXT keys when alg is omitted", () => {
+    const { publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const publicKeyBytes = publicKey.export({ format: "der", type: "spki" });
+    const encodedPublicKey = Buffer.from(publicKeyBytes).toString("base64url");
+    const parsed = parsePosemeshTxt(`posemesh:v1; publicKey=${encodedPublicKey}`);
+
+    assert.deepEqual(parsed.publicKeys, [encodedPublicKey]);
+    assert.equal(parsed.verificationKeys[0]?.algorithm, "ecdsa-p256-sha256");
+  });
+
+  it("parses multiple TXT verification keys with rotation windows", () => {
+    const parsed = parsePosemeshTxt(
+      `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; publicKeys=${TXT_PUBLIC_KEY_TWO},${TXT_PUBLIC_KEY_THREE}; keyId=rotating-key; alg=ed25519; notBefore=2026-05-12T00:00:00Z; notAfter=2026-05-13T00:00:00Z`,
+    );
+
+    assert.deepEqual(parsed.publicKeys, [TXT_PUBLIC_KEY, TXT_PUBLIC_KEY_TWO, TXT_PUBLIC_KEY_THREE]);
+    assert.equal(parsed.verificationKeys.length, 3);
+    assert.equal(parsed.verificationKeys[0]?.id, "rotating-key");
+    assert.equal(parsed.verificationKeys[0]?.notBefore, "2026-05-12T00:00:00Z");
+    assert.equal(parsed.verificationKeys[0]?.notAfter, "2026-05-13T00:00:00Z");
   });
 
   it("parses agent-identity:v1 JSON records", () => {
@@ -41,7 +67,32 @@ describe("TXT parsing", () => {
 
     assert.equal(result.records.length, 0);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
     assert.match(result.warnings[0]?.message ?? "", /https/);
+  });
+
+  it("rejects TXT URLs that include username or password", () => {
+    const result = parseTxtRecords([
+      "posemesh:v1; manifest=https://user:pass@example.com/posemesh.json",
+      "agent-identity:v1={\"version\":1,\"endpoint\":\"https://user:pass@example.com/agent.json\",\"capabilities\":[\"domain-discovery\"]}",
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 2);
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
+    assert.match(result.warnings[0]?.message ?? "", /username or password/);
+    assert.match(result.warnings[1]?.message ?? "", /username or password/);
+  });
+
+  it("rejects duplicate compact posemesh TXT fields", () => {
+    const result = parseTxtRecords([
+      "posemesh:v1; manifest=https://example.com/one.json; manifest=https://example.com/two.json",
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
+    assert.match(result.warnings[0]?.message ?? "", /Duplicate posemesh TXT field: manifest/);
   });
 
   it("ignores unrelated TXT records and reports parse warnings", () => {
@@ -54,6 +105,7 @@ describe("TXT parsing", () => {
     assert.equal(result.records.length, 1);
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
     assert.deepEqual(result.records[0]?.publicKeys, [TXT_PUBLIC_KEY]);
     assert.deepEqual(result.records[0]?.capabilities, ["relay-discovery"]);
   });
@@ -65,6 +117,66 @@ describe("TXT parsing", () => {
 
     assert.equal(result.records.length, 0);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
     assert.match(result.warnings[0]?.message ?? "", /hex or base64/);
+  });
+
+  it("rejects RSA SPKI keys declared as ECDSA P-256 TXT keys", () => {
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const rsaSpki = publicKey.export({ format: "der", type: "spki" });
+    const result = parseTxtRecords([
+      `posemesh:v1; alg=ecdsa-p256-sha256; publicKey=${Buffer.from(rsaSpki).toString("base64url")}`,
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
+    assert.match(result.warnings[0]?.message ?? "", /P-256/);
+  });
+
+  it("rejects invalid raw P-256 points in TXT keys", () => {
+    const invalidPoint = `04${"00".repeat(64)}`;
+    const result = parseTxtRecords([
+      `posemesh:v1; alg=ecdsa-p256-sha256; publicKey=${invalidPoint}`,
+    ]);
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_PUBLIC_KEY_INVALID");
+    assert.match(result.warnings[0]?.message ?? "", /P-256/);
+  });
+
+  it("enforces TXT parser limits", () => {
+    assert.throws(
+      () => parseTxtRecords(["v=spf1 -all", "v=spf1 -all"], { maxTxtRecords: 1 }),
+      /TXT records exceeds limit 1/,
+    );
+
+    const result = parseTxtRecords(
+      [
+        `posemesh:v1; publicKey=${TXT_PUBLIC_KEY}; capabilities=${"a".repeat(16)}`,
+      ],
+      { maxFieldValueBytes: 8 },
+    );
+
+    assert.equal(result.records.length, 0);
+    assert.equal(result.warnings[0]?.code, "TXT_LIMIT_EXCEEDED");
+    assert.match(result.warnings[0]?.message ?? "", /exceeds 8 bytes/);
+  });
+
+  it("supports optional redacted parser logging", () => {
+    const warnFields: unknown[] = [];
+    const logger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: (_message: string, fields?: unknown) => warnFields.push(fields),
+      error: () => undefined,
+    };
+
+    parseTxtRecords(["posemesh:v1; publicKey=not_a_hex_or_base64_key"], { logger });
+
+    assert.equal(warnFields.length, 1);
+    assert.equal((warnFields[0] as { record?: string }).record, undefined);
+    assert.equal(typeof (warnFields[0] as { recordBytes?: number }).recordBytes, "number");
   });
 });

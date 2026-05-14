@@ -14,7 +14,7 @@ This prototype now shows one concrete path:
 
 1. Resolve TXT records for a subname under `.posemesh`.
 2. Parse versioned Posemesh or agent identity metadata.
-3. Fetch a manifest that could later be signed and verified.
+3. Fetch a signed manifest envelope and verify it against keys anchored in `.posemesh` TXT metadata.
 4. Return normalized service discovery data for clients, tools, robots, and agents.
 
 The manifest schema has been expanded beyond generic relays and domain managers to include Posemesh-oriented categories observed in public Auki repositories: reconstruction nodes, splatter nodes, VLM nodes, pathfinding services, wallets, regions, and health checks. This is prototype terminology, not an official Auki schema.
@@ -185,12 +185,11 @@ The prototype now supports a Posemesh-oriented manifest shape:
   "wallets": [],
   "publicKeys": [],
   "capabilities": [],
-  "healthCheck": "https://example.com/health",
-  "signature": "TODO"
+  "healthCheck": "https://example.com/health"
 }
 ```
 
-The important production step is still signature verification. TXT records can point to a manifest, but clients need a way to verify that the manifest was authorized by the expected `.posemesh` subname or operator key.
+The prototype now includes a first-pass strict signed-envelope path for built-in live manifest fetching. The remaining production work is to define Auki-owned signing policy, key rotation, signer roles, resolver redundancy, and operational review.
 
 ## Suggested Adoption Path
 

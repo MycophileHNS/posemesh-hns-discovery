@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import type { ClientRequest, IncomingMessage } from "node:http";
+import type { RequestOptions } from "node:https";
+import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { discoverPosemesh } from "../src/discover.ts";
 import { MockResolver } from "../src/resolvers.ts";
-import type { PosemeshManifest } from "../src/types.ts";
+import type { ManifestTlsaRecord, PosemeshManifest, TxtResolver } from "../src/types.ts";
 
 const fixedNow = new Date("2026-05-11T00:00:00.000Z");
-const TXT_KEY = "02aa";
-const MANIFEST_KEY = "02bb";
-const WALLET_KEY = "02cc";
-const MANAGER_KEY = "02dd";
-const RELAY_KEY = "02ee";
-const RECONSTRUCTION_KEY = "02ff";
+const TXT_KEY = "aa".repeat(32);
+const MANIFEST_KEY = "bb".repeat(32);
+const WALLET_KEY = "cc".repeat(32);
+const MANAGER_KEY = "dd".repeat(32);
+const RELAY_KEY = "ee".repeat(32);
+const RECONSTRUCTION_KEY = "ff".repeat(32);
 
 describe("discoverPosemesh", () => {
   it("returns normalized discovery output from TXT and manifest data", async () => {
@@ -92,6 +96,7 @@ describe("discoverPosemesh", () => {
     const result = await discoverPosemesh("hq.posemesh", {
       resolver,
       now: () => fixedNow,
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => manifest,
     });
 
@@ -165,11 +170,15 @@ describe("discoverPosemesh", () => {
       version: 1,
       sourceName: "hq.posemesh",
     };
-    const manifestFetchOptions = { timeoutMs: 1_000, maxBytes: 4_096 };
+    const manifestFetchOptions = {
+      timeoutMs: 1_000,
+      maxBytes: 4_096,
+      securityMode: "demo" as const,
+    };
     let receivedOptions: unknown;
 
     await discoverPosemesh("hq.posemesh", {
-      resolver: new MockResolver({
+      resolver: createTxtOnlyResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
       manifestFetchOptions,
@@ -180,7 +189,92 @@ describe("discoverPosemesh", () => {
       now: () => fixedNow,
     });
 
-    assert.deepEqual(receivedOptions, manifestFetchOptions);
+    assert.deepEqual(receivedOptions, {
+      ...manifestFetchOptions,
+      trustedKeys: [],
+      expectedName: "hq.posemesh",
+      expectedManifestUrl: "https://example.com/hq.json",
+    });
+  });
+
+  it("reuses the selected resolver for TLSA manifest fetch options", async () => {
+    const tlsaRecord = {
+      certUsage: 3,
+      selector: 1,
+      matchingType: 1,
+      data: "abcd",
+    };
+    const resolver = new MockResolver(
+      {
+        "hq.posemesh": ["posemesh:v1; manifest=https://manifest.example.test/posemesh.json"],
+      },
+      {
+        tlsaRecords: {
+          "_443._tcp.manifest.example.test": [tlsaRecord],
+        },
+      },
+    );
+    let resolvedTlsa: ManifestTlsaRecord[] | undefined;
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver,
+      manifestFetchOptions: {
+        securityMode: "demo",
+        enableDane: true,
+        requireTlsa: true,
+      },
+      manifestFetcher: async (_url, options) => {
+        const resolveTlsa = options?.resolveTlsa;
+        assert.equal(typeof resolveTlsa, "function");
+        if (!resolveTlsa) {
+          throw new Error("Expected derived TLSA resolver.");
+        }
+        resolvedTlsa = await resolveTlsa("manifest.example.test", 443);
+        return {
+          version: 1,
+          sourceName: "hq.posemesh",
+        };
+      },
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(resolvedTlsa, [tlsaRecord]);
+  });
+
+  it("anchors manifest verification keys from posemesh TXT records", async () => {
+    const txtPublicKey = Buffer.alloc(32, 1).toString("base64");
+    let receivedOptions: unknown;
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver: createTxtOnlyResolver({
+        "hq.posemesh": [
+          `posemesh:v1; manifest=https://example.com/hq.json; alg=ed25519; keyId=hq-key; publicKey=${txtPublicKey}`,
+        ],
+      }),
+      manifestFetchOptions: { securityMode: "demo" },
+      manifestFetcher: async (_url, options) => {
+        receivedOptions = options;
+        return {
+          version: 1,
+          sourceName: "hq.posemesh",
+        };
+      },
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(receivedOptions, {
+      trustedKeys: [
+        {
+          id: "hq-key",
+          algorithm: "ed25519",
+          publicKey: txtPublicKey,
+          source: "txt",
+        },
+      ],
+      securityMode: "demo",
+      expectedName: "hq.posemesh",
+      expectedManifestUrl: "https://example.com/hq.json",
+    });
   });
 
   it("surfaces TXT parse warnings in the normalized result", async () => {
@@ -198,6 +292,7 @@ describe("discoverPosemesh", () => {
     assert.deepEqual(result.publicKeys, [TXT_KEY]);
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.record, "posemesh:v1; broken");
+    assert.equal(result.warnings[0]?.code, "TXT_PARSE_ERROR");
   });
 
   it("keeps TXT-derived data when manifest fetching fails", async () => {
@@ -219,6 +314,97 @@ describe("discoverPosemesh", () => {
     assert.equal(result.warnings.length, 1);
     assert.equal(result.warnings[0]?.source, "manifest");
     assert.equal(result.warnings[0]?.url, "https://example.com/missing.json");
+    assert.equal(result.warnings[0]?.code, "MANIFEST_FETCH_ERROR");
+  });
+
+  it("fails closed when requireManifest is set and manifest fetching fails", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": [
+              `posemesh:v1; manifest=https://example.com/missing.json; publicKey=${TXT_KEY}; capabilities=domain-discovery`,
+            ],
+          }),
+          requireManifest: true,
+          manifestFetcher: async () => {
+            throw new Error("demo fetch failed");
+          },
+          now: () => fixedNow,
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_FETCH_ERROR");
+        assert.match((error as Error).message, /Required manifest discovery failed/);
+        return true;
+      },
+    );
+  });
+
+  it("rejects plain custom manifestFetcher results when requireManifest is set", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+          }),
+          requireManifest: true,
+          manifestFetcher: async () => ({
+            version: 1,
+            sourceName: "hq.posemesh",
+          }),
+          now: () => fixedNow,
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_SIGNATURE_REQUIRED");
+        assert.match((error as Error).message, /Required manifest discovery failed/);
+        return true;
+      },
+    );
+  });
+
+  it("treats plain custom manifestFetcher results as unverified by default", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": [
+          "posemesh:v1; manifest=https://example.com/hq.json; capabilities=domain-discovery",
+        ],
+      }),
+      manifestFetcher: async () => ({
+        version: 1,
+        sourceName: "hq.posemesh",
+        relays: [{ endpoint: "wss://relay.example.com" }],
+      }),
+      now: () => fixedNow,
+    });
+
+    assert.deepEqual(result.relays, []);
+    assert.deepEqual(result.capabilities, ["domain-discovery"]);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_SIGNATURE_REQUIRED");
+  });
+
+  it("surfaces demo-mode unsigned manifest warnings in normalized discovery", async () => {
+    const result = await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; manifest=https://manifest.example.test/posemesh.json"],
+      }),
+      manifestFetchOptions: {
+        securityMode: "demo",
+        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+        httpsRequest: createManifestHttpsRequest(
+          JSON.stringify({
+            version: 1,
+            sourceName: "hq.posemesh",
+          }),
+        ),
+      },
+      now: () => fixedNow,
+    });
+
+    assert.equal(result.sourceName, "hq.posemesh");
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_SIGNATURE_REQUIRED");
+    assert.match(result.warnings[0]?.message ?? "", /demo mode accepted an unsigned manifest/);
   });
 
   it("warns when no TXT records are found", async () => {
@@ -229,6 +415,7 @@ describe("discoverPosemesh", () => {
 
     assert.deepEqual(result.publicKeys, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "TXT_NO_RECORDS");
     assert.match(result.warnings[0]?.message ?? "", /No TXT records/);
   });
 
@@ -251,7 +438,25 @@ describe("discoverPosemesh", () => {
 
     assert.equal(fetchCalls, 0);
     assert.equal(result.manifestUrl, undefined);
+    assert.equal(result.warnings[0]?.code, "TXT_AMBIGUOUS_MANIFEST");
     assert.match(result.warnings[0]?.message ?? "", /Multiple distinct manifest URLs/);
+  });
+
+  it("fails closed when requireManifest is set and no unambiguous manifest URL exists", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": [
+              "posemesh:v1; manifest=https://example.com/one.json",
+              "posemesh:v1; manifest=https://example.com/two.json",
+            ],
+          }),
+          requireManifest: true,
+          now: () => fixedNow,
+        }),
+      /requires an unambiguous posemesh:v1 manifest URL/,
+    );
   });
 
   it("keeps agent identity endpoints separate from manifest URLs", async () => {
@@ -282,6 +487,7 @@ describe("discoverPosemesh", () => {
       resolver: new MockResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => ({
         version: 1,
         sourceName: "mismatch.posemesh",
@@ -293,7 +499,40 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /does not match/);
+  });
+
+  it("fails closed when requireManifest is set and manifest identity does not match", async () => {
+    await assert.rejects(
+      () =>
+        discoverPosemesh("hq.posemesh", {
+          resolver: new MockResolver({
+            "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
+          }),
+          requireManifest: true,
+          manifestFetcher: async () => ({
+            manifest: {
+              version: 1,
+              sourceName: "mismatch.posemesh",
+            },
+            verification: {
+              status: "verified",
+              verifiedAt: fixedNow.toISOString(),
+            },
+            cache: {
+              cacheStatus: "fresh",
+              checkedAt: fixedNow.toISOString(),
+            },
+          }),
+          now: () => fixedNow,
+        }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MANIFEST_BINDING_MISMATCH");
+        assert.match((error as Error).message, /Required manifest discovery failed/);
+        return true;
+      },
+    );
   });
 
   it("drops fetched manifest data when sourceName is missing", async () => {
@@ -301,6 +540,7 @@ describe("discoverPosemesh", () => {
       resolver: new MockResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => ({
         version: 1,
         name: "hq.posemesh",
@@ -312,6 +552,7 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /sourceName is required/);
   });
 
@@ -320,6 +561,7 @@ describe("discoverPosemesh", () => {
       resolver: new MockResolver({
         "hq.posemesh": ["posemesh:v1; manifest=https://example.com/hq.json"],
       }),
+      manifestFetchOptions: { securityMode: "demo" },
       manifestFetcher: async () => ({
         version: 1,
         sourceName: "hq.posemesh",
@@ -332,6 +574,70 @@ describe("discoverPosemesh", () => {
     assert.equal(result.sourceName, "hq.posemesh");
     assert.deepEqual(result.relays, []);
     assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0]?.code, "MANIFEST_BINDING_MISMATCH");
     assert.match(result.warnings[0]?.message ?? "", /Manifest name/);
   });
+
+  it("supports optional discovery logging without leaking raw TXT records", async () => {
+    const events: Array<{ message: string; fields?: unknown }> = [];
+    const logger = {
+      debug: (message: string, fields?: unknown) => events.push({ message, fields }),
+      info: (message: string, fields?: unknown) => events.push({ message, fields }),
+      warn: (message: string, fields?: unknown) => events.push({ message, fields }),
+      error: (message: string, fields?: unknown) => events.push({ message, fields }),
+    };
+
+    await discoverPosemesh("hq.posemesh", {
+      resolver: new MockResolver({
+        "hq.posemesh": ["posemesh:v1; publicKey=not_a_hex_or_base64_key"],
+      }),
+      fetchManifest: false,
+      logger,
+      now: () => fixedNow,
+    });
+
+    assert.ok(events.some((event) => event.message === "Starting Posemesh discovery"));
+    assert.ok(events.some((event) => event.message === "TXT record parse warning"));
+    assert.equal(
+      events.some((event) => JSON.stringify(event.fields).includes("not_a_hex_or_base64_key")),
+      false,
+    );
+  });
 });
+
+function createManifestHttpsRequest(body: string) {
+  return ((_: RequestOptions, callback?: (response: IncomingMessage) => void) => {
+    const req = new EventEmitter() as ClientRequest;
+
+    (req as ClientRequest & { setTimeout: ClientRequest["setTimeout"] }).setTimeout = () => req;
+    (req as ClientRequest & { destroy: ClientRequest["destroy"] }).destroy = (error?: Error) => {
+      if (error) {
+        req.emit("error", error);
+      }
+
+      return req;
+    };
+    (req as ClientRequest & { end: ClientRequest["end"] }).end = () => {
+      const response = new PassThrough() as PassThrough & Partial<IncomingMessage>;
+      response.statusCode = 200;
+      response.headers = {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(body)),
+      };
+
+      callback?.(response as IncomingMessage);
+      response.end(body);
+      return req;
+    };
+
+    return req;
+  }) as NonNullable<import("../src/types.ts").FetchPosemeshManifestOptions["httpsRequest"]>;
+}
+
+function createTxtOnlyResolver(records: Record<string, string[]>): TxtResolver {
+  const resolver = new MockResolver(records);
+
+  return {
+    resolveTxt: (name: string) => resolver.resolveTxt(name),
+  };
+}

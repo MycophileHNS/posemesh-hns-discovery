@@ -1,3 +1,5 @@
+import { discoveryError } from "./observability.ts";
+
 export interface NameValidationResult {
   ok: boolean;
   normalizedName?: string;
@@ -46,7 +48,9 @@ export function assertValidPosemeshName(name: string): string {
   const result = validatePosemeshName(name);
 
   if (!result.ok || !result.normalizedName) {
-    throw new Error(result.error ?? "Invalid .posemesh name.");
+    throw discoveryError("INVALID_POSEMESH_NAME", result.error ?? "Invalid .posemesh name.", {
+      name,
+    });
   }
 
   return result.normalizedName;
