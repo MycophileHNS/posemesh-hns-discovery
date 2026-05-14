@@ -8,10 +8,10 @@ This is not official Auki software. It is not endorsed by Auki Labs. It is not a
 
 ## Known Limitations (Prototype)
 
-- Legacy inline `manifest.signature` verification is stubbed; strict signed-envelope verification exists separately
+- Legacy inline `manifest.signature` values are prototype metadata only; strict signed-envelope verification exists separately
 - Relies on external Handshake resolvers, so resolver trust policy still matters
 - Demo manifests are unsigned mock data
-- No built-in rate limiter or persistent client cache yet
+- No built-in rate limiter or persistent client cache yet; cache/freshness metadata is exposed for callers
 
 ## Five-minute summary
 

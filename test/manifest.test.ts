@@ -849,33 +849,24 @@ describe("Posemesh manifest parsing", () => {
       sourceName: "hq.posemesh",
       signature: "legacy-inline-signature",
     });
-    const originalWarn = console.warn;
-    const warnings: string[] = [];
 
-    console.warn = (message?: unknown) => {
-      warnings.push(String(message));
-    };
+    for (const securityMode of ["permissive", "demo"] as const) {
+      const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
+        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+        httpsRequest: createManifestHttpsRequest(body),
+        securityMode,
+        expectedName: "hq.posemesh",
+      });
 
-    try {
-      for (const securityMode of ["permissive", "demo"] as const) {
-        const fetched = await fetchPosemeshManifestWithVerification(manifestUrl, {
-          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
-          httpsRequest: createManifestHttpsRequest(body),
-          securityMode,
-          expectedName: "hq.posemesh",
-        });
-
-        assert.equal(fetched.manifest.sourceName, "hq.posemesh");
-        assert.equal(fetched.manifest.signature, "legacy-inline-signature");
-        assert.equal(fetched.manifest.verified, true);
-        assert.equal(fetched.verification.status, "unsigned-allowed");
-      }
-    } finally {
-      console.warn = originalWarn;
+      assert.equal(fetched.manifest.sourceName, "hq.posemesh");
+      assert.equal(fetched.manifest.signature, "legacy-inline-signature");
+      assert.equal(fetched.manifest.verified, false);
+      assert.equal(fetched.verification.status, "unsigned-allowed");
+      assert.match(
+        fetched.warnings?.map((warning) => warning.message).join("\n") ?? "",
+        /Legacy inline manifest\.signature is prototype metadata only/,
+      );
     }
-
-    assert.equal(warnings.length, 2);
-    assert.match(warnings[0] ?? "", /inline signature verification is not yet implemented/);
   });
 
   it("does not treat plain manifests with envelope-like metadata as signed envelopes", async () => {

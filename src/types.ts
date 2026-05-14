@@ -127,7 +127,17 @@ export interface PosemeshManifest {
   publicKeys?: string[];
   capabilities?: string[];
   healthCheck?: string;
+  /**
+   * Legacy inline prototype signature field. This is not used for production
+   * trust decisions; use FetchedPosemeshManifest.verification for signed
+   * manifest envelopes instead.
+   */
   signature?: string;
+  /**
+   * Deprecated prototype compatibility flag for legacy inline signatures.
+   * It is intentionally false until inline-signature verification is actually
+   * implemented.
+   */
   verified?: boolean;
 }
 

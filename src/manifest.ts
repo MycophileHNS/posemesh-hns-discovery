@@ -282,6 +282,7 @@ export function parsePosemeshManifest(
     bootstrapNodes.length;
 
   enforceManifestMaxCount(totalServices, resolvedLimits.maxTotalServices, "service endpoints");
+  const legacyInlineSignature = optionalStringField(value, "signature", resolvedLimits);
 
   return {
     version: 1,
@@ -313,26 +314,12 @@ export function parsePosemeshManifest(
       resolvedLimits,
     ),
     ...optionalUrlField(value, "healthCheck", ["https:"], resolvedLimits),
-    ...optionalStringField(value, "signature", resolvedLimits),
-    verified: verifyManifestSignature(
-      {
-        version: 1,
-        ...optionalStringField(value, "signature", resolvedLimits),
-      },
-      publicKeys,
-    ),
+    ...legacyInlineSignature,
+    // Legacy inline signatures are kept as prototype metadata only. Trust
+    // decisions must use FetchedPosemeshManifest.verification from signed
+    // manifest envelopes.
+    verified: false,
   };
-}
-
-function verifyManifestSignature(manifest: PosemeshManifest, publicKeys: string[]): boolean {
-  if (!manifest.signature) {
-    return false;
-  }
-
-  console.warn("Manifest inline signature verification is not yet implemented in this prototype.");
-  // TODO: Production - verify Ed25519/ECDSA signature over canonical JSON using publicKeys.
-  void publicKeys;
-  return true;
 }
 
 /**
@@ -399,6 +386,15 @@ export function parseFetchedManifestText(
       "MANIFEST_SIGNATURE_REQUIRED",
     ),
   ];
+  if (unsignedManifest.signature) {
+    warnings.push(
+      createManifestWarning(
+        originalUrl,
+        "Legacy inline manifest.signature is prototype metadata only and was not cryptographically verified. Use a signed manifest envelope for trust decisions.",
+        "MANIFEST_SIGNATURE_REQUIRED",
+      ),
+    );
+  }
 
   return createFetchedManifestResult(
     unsignedManifest,
